@@ -3,7 +3,3 @@ gunicorn>=21.2.0
 werkzeug>=3.0.0
 anthropic>=0.94.0
 python-dotenv>=1.0.0
-fast-alpr[onnx]
-onnxruntime==1.19.2
-numpy>=2,<3
-opencv-python-headless>=4.9.0

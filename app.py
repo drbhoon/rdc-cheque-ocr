@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
+import anthropic
 
 load_dotenv()
 
@@ -16,42 +17,22 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
 
-_detector = None
-_anthropic_client = None
+_client = None
 
 
-def get_detector():
-    global _detector
-    if _detector is None:
-        from open_image_models import LicensePlateDetector
-        _detector = LicensePlateDetector(
-            detection_model="yolo-v9-t-384-license-plate-end2end",
-            conf_thresh=0.20,
-        )
-    return _detector
-
-
-def get_anthropic_client():
-    global _anthropic_client
-    if _anthropic_client is None:
-        import anthropic
+def get_client():
+    global _client
+    if _client is None:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
-        _anthropic_client = anthropic.Anthropic(api_key=api_key)
-    return _anthropic_client
+            raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+        _client = anthropic.Anthropic(api_key=api_key)
+    return _client
 
 
-def ocr_plate_with_claude(crop_bgr):
-    """Send a plate crop to Claude Haiku and get back the plate number text."""
-    # Encode the crop as JPEG base64
-    success, buf = cv2.imencode(".jpg", crop_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    if not success:
-        return None, 0.0
-    img_b64 = base64.standard_b64encode(buf.tobytes()).decode("utf-8")
-
-    client = get_anthropic_client()
-    message = client.messages.create(
+def read_plate(img_bytes, media_type="image/jpeg"):
+    img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
+    message = get_client().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=64,
         messages=[
@@ -60,28 +41,23 @@ def ocr_plate_with_claude(crop_bgr):
                 "content": [
                     {
                         "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": img_b64,
-                        },
+                        "source": {"type": "base64", "media_type": media_type, "data": img_b64},
                     },
                     {
                         "type": "text",
                         "text": (
-                            "This is a vehicle license plate. "
-                            "Read the plate number exactly as printed. "
-                            "Reply with ONLY the alphanumeric plate number, no spaces, no punctuation, no explanation."
+                            "Look at this vehicle image. Find the license plate and read the number exactly as printed. "
+                            "Reply with ONLY the plate number (letters and digits only, no spaces, no punctuation, no explanation). "
+                            "If no plate is visible, reply with NONE."
                         ),
                     },
                 ],
             }
         ],
     )
-    text = message.content[0].text.strip().upper()
-    # Strip any stray punctuation/spaces just in case
-    text = "".join(c for c in text if c.isalnum())
-    return text
+    raw = message.content[0].text.strip().upper()
+    text = "".join(c for c in raw if c.isalnum())
+    return text if text and text != "NONE" else None
 
 
 def allowed_file(filename):
@@ -102,64 +78,22 @@ def predict():
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
 
-    if not allowed_file(file.filename):
-        return jsonify({"error": "Unsupported file type. Use PNG, JPG, JPEG, WEBP, or BMP"}), 400
-
     ext = file.filename.rsplit(".", 1)[1].lower()
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": "Unsupported file type"}), 400
+
+    img_bytes = file.read()
+    media_type = "image/jpeg" if ext in {"jpg", "jpeg"} else f"image/{ext}"
 
     try:
-        img = cv2.imread(filepath)
-        if img is None:
-            return jsonify({"error": "Could not read image file"}), 400
-
-        ih, iw = img.shape[:2]
-
-        # Step 1: detect plate bounding boxes with local YOLO model
-        detector = get_detector()
-        detections = detector.predict(filepath)
-
-        plates = []
-
-        if detections:
-            # Step 2a: crop each detected plate and OCR with Claude
-            for det in detections:
-                box = det.bounding_box
-                x1 = max(0, int(box.x1))
-                y1 = max(0, int(box.y1))
-                x2 = min(iw, int(box.x2))
-                y2 = min(ih, int(box.y2))
-
-                crop = img[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
-
-                text = ocr_plate_with_claude(crop)
-                if text:
-                    plates.append({
-                        "text": text,
-                        "detection_confidence": round(float(det.confidence), 3),
-                    })
+        text = read_plate(img_bytes, media_type)
+        if text:
+            return jsonify({"plates": [{"text": text}], "count": 1})
         else:
-            # Step 2b: no plate box found — send full image to Claude anyway
-            text = ocr_plate_with_claude(img)
-            if text:
-                plates.append({
-                    "text": text,
-                    "detection_confidence": None,
-                })
-
-        return jsonify({"plates": plates, "count": len(plates)})
-
+            return jsonify({"plates": [], "count": 0})
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
-
-    finally:
-        if os.path.exists(filepath):
-            os.remove(filepath)
 
 
 if __name__ == "__main__":
