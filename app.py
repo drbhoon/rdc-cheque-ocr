@@ -28,11 +28,22 @@ def get_client():
     return _client
 
 
+PROMPT = """This is an image of an Indian vehicle (truck/lorry) captured from a CCTV or camera.
+Find the registration (number) plate and read it carefully — the image may be blurry or low resolution.
+
+Indian plates follow this format: 2-letter state code + 2-digit district + 1-2 letter series + 4-digit number.
+Example: MH12AB1234, OR02BU3389, KA51MX4567.
+The plate may be printed on two lines — read both lines combined as one number.
+
+Reply with ONLY the plate number, no spaces, no punctuation, no explanation.
+If no plate is visible at all, reply with NONE."""
+
+
 def read_plate(img_bytes, media_type="image/jpeg"):
     img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
     message = get_client().messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=64,
+        model="claude-sonnet-4-6",
+        max_tokens=32,
         messages=[
             {
                 "role": "user",
@@ -41,14 +52,7 @@ def read_plate(img_bytes, media_type="image/jpeg"):
                         "type": "image",
                         "source": {"type": "base64", "media_type": media_type, "data": img_b64},
                     },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Look at this vehicle image. Find the license plate and read the number exactly as printed. "
-                            "Reply with ONLY the plate number (letters and digits only, no spaces, no punctuation, no explanation). "
-                            "If no plate is visible, reply with NONE."
-                        ),
-                    },
+                    {"type": "text", "text": PROMPT},
                 ],
             }
         ],
