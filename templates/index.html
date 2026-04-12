@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Truck Plate OCR</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2d3148;
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 560px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #4f6ef7, #7c3aed);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+
+    .logo h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .logo p {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+
+    /* Drop zone */
+    .drop-zone {
+      border: 2px dashed #2d3148;
+      border-radius: 12px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.dragover {
+      border-color: #4f6ef7;
+      background: rgba(79, 110, 247, 0.05);
+    }
+
+    .drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .drop-icon { font-size: 40px; margin-bottom: 12px; }
+
+    .drop-zone h2 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .drop-zone p {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .preview-wrap {
+      margin-top: 16px;
+      display: none;
+    }
+
+    .preview-wrap img {
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      border-radius: 8px;
+      border: 1px solid #2d3148;
+    }
+
+    .preview-name {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 8px;
+      text-align: center;
+    }
+
+    /* Button */
+    .btn {
+      margin-top: 20px;
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, #4f6ef7, #7c3aed);
+      border: none;
+      border-radius: 10px;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    .btn:hover:not(:disabled) { opacity: 0.9; }
+    .btn:active:not(:disabled) { transform: scale(0.99); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Results */
+    .result-section {
+      margin-top: 28px;
+      display: none;
+    }
+
+    .result-section h3 {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #6b7280;
+      margin-bottom: 12px;
+    }
+
+    .plate-card {
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .plate-text {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 3px;
+      font-family: 'Courier New', monospace;
+      color: #f0f4ff;
+    }
+
+    .plate-meta {
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .conf-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      background: rgba(79, 110, 247, 0.15);
+      color: #7c9bff;
+      margin-bottom: 4px;
+    }
+
+    .conf-label {
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .copy-btn {
+      background: none;
+      border: 1px solid #2d3148;
+      border-radius: 6px;
+      color: #6b7280;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .copy-btn:hover { color: #e2e8f0; border-color: #4f6ef7; }
+
+    .no-plate {
+      text-align: center;
+      padding: 24px;
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .error-box {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 14px;
+      color: #f87171;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2d3148;
+      margin: 28px 0 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">🚛</div>
+      <div>
+        <h1>Truck Plate OCR</h1>
+        <p>Upload a number plate image to extract text</p>
+      </div>
+    </div>
+
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp" />
+      <div class="drop-icon">📷</div>
+      <h2>Drop image here or click to browse</h2>
+      <p>PNG, JPG, JPEG, WEBP, BMP — max 16 MB</p>
+    </div>
+
+    <div class="preview-wrap" id="previewWrap">
+      <img id="previewImg" src="" alt="Preview" />
+      <div class="preview-name" id="previewName"></div>
+    </div>
+
+    <button class="btn" id="submitBtn" disabled>
+      Detect Plate Number
+    </button>
+
+    <div class="result-section" id="resultSection">
+      <hr class="divider" style="margin-bottom:28px; margin-top:0;" />
+      <h3>Detected Plates</h3>
+      <div id="resultBody"></div>
+    </div>
+  </div>
+
+  <script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const previewWrap = document.getElementById('previewWrap');
+    const previewImg = document.getElementById('previewImg');
+    const previewName = document.getElementById('previewName');
+    const submitBtn = document.getElementById('submitBtn');
+    const resultSection = document.getElementById('resultSection');
+    const resultBody = document.getElementById('resultBody');
+
+    let selectedFile = null;
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) loadPreview(fileInput.files[0]);
+    });
+
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file) loadPreview(file);
+    });
+
+    function loadPreview(file) {
+      selectedFile = file;
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      previewName.textContent = file.name;
+      previewWrap.style.display = 'block';
+      submitBtn.disabled = false;
+      resultSection.style.display = 'none';
+    }
+
+    submitBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner"></span>Analyzing...';
+      resultSection.style.display = 'none';
+
+      const formData = new FormData();
+      formData.append('image', selectedFile);
+
+      try {
+        const res = await fetch('/predict', { method: 'POST', body: formData });
+        const data = await res.json();
+
+        resultBody.innerHTML = '';
+
+        if (data.error) {
+          resultBody.innerHTML = `<div class="error-box">⚠️ ${escHtml(data.error)}</div>`;
+        } else if (data.count === 0) {
+          resultBody.innerHTML = `<div class="no-plate">No license plates detected in this image.</div>`;
+        } else {
+          data.plates.forEach(p => {
+            const conf = Math.round(p.ocr_confidence * 100);
+            resultBody.innerHTML += `
+              <div class="plate-card">
+                <div>
+                  <div class="plate-text">${escHtml(p.text)}</div>
+                  <button class="copy-btn" onclick="copyText('${escHtml(p.text)}', this)">Copy</button>
+                </div>
+                <div class="plate-meta">
+                  <div class="conf-badge">${conf}% confident</div>
+                  <div class="conf-label">OCR confidence</div>
+                </div>
+              </div>`;
+          });
+        }
+
+        resultSection.style.display = 'block';
+      } catch (err) {
+        resultBody.innerHTML = `<div class="error-box">⚠️ Request failed. Is the server running?</div>`;
+        resultSection.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = 'Detect Plate Number';
+      }
+    });
+
+    function escHtml(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function copyText(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1800);
+      });
+    }
+  </script>
+</body>
+</html>
