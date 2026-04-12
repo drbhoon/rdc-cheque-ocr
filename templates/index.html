@@ -334,7 +334,7 @@
           resultBody.innerHTML = `<div class="no-plate">No license plates detected in this image.</div>`;
         } else {
           data.plates.forEach(p => {
-            const conf = Math.round(p.ocr_confidence * 100);
+            const detConf = p.detection_confidence ? Math.round(p.detection_confidence * 100) : null;
             resultBody.innerHTML += `
               <div class="plate-card">
                 <div>
@@ -342,8 +342,7 @@
                   <button class="copy-btn" onclick="copyText('${escHtml(p.text)}', this)">Copy</button>
                 </div>
                 <div class="plate-meta">
-                  <div class="conf-badge">${conf}% confident</div>
-                  <div class="conf-label">OCR confidence</div>
+                  ${detConf ? `<div class="conf-badge">${detConf}% detection</div><div class="conf-label">plate detected</div>` : '<div class="conf-badge">AI read</div>'}
                 </div>
               </div>`;
           });

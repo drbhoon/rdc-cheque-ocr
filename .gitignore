@@ -6,3 +6,4 @@ venv/
 .venv/
 uploads/
 *.onnx
+gunicorn_config.py
