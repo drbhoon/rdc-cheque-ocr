@@ -1,8 +1,6 @@
 import os
 import uuid
 import base64
-import cv2
-import numpy as np
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 import anthropic
