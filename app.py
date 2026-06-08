@@ -1,5 +1,6 @@
 import os
-import uuid
+import re
+import json
 import base64
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
@@ -9,9 +10,6 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
-
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
 
@@ -28,22 +26,31 @@ def get_client():
     return _client
 
 
-PROMPT = """This is an image of an Indian vehicle (truck/lorry) captured from a CCTV or camera.
-Find the registration (number) plate and read it carefully — the image may be blurry or low resolution.
+PROMPT = """You are scanning an Indian bank cheque image. Extract exactly these 7 fields and return them as a valid JSON object.
 
-Indian plates follow this format: 2-letter state code + 2-digit district + 1-2 letter series + 4-digit number.
-Example: MH12AB1234, OR02BU3389, KA51MX4567.
-The plate may be printed on two lines — read both lines combined as one number.
+Fields:
+1. bank_name       — Bank name printed on the cheque (e.g. "ICICI Bank")
+2. account_number  — Account number from the A/c No. field (digits only, no spaces)
+3. date            — Date written on the cheque exactly as shown (e.g. "14/7/22")
+4. payee           — Name in the "Pay" field (who the cheque is made out to)
+5. amount_words    — Amount in the "Rupees" line written in words (e.g. "Five Lakhs Only")
+6. amount_numbers  — Amount in the numeric box (e.g. "5,00,000")
+7. issuer_name     — Account holder / drawer name printed at the bottom of the cheque
 
-Reply with ONLY the plate number, no spaces, no punctuation, no explanation.
-If no plate is visible at all, reply with NONE."""
+Rules:
+- Return ONLY a raw JSON object, no markdown fences, no explanation.
+- Use null for any field that is not visible or unreadable.
+- Do not invent or guess values — use null if uncertain.
+
+Example output:
+{"bank_name":"ICICI Bank","account_number":"015601500005","date":"14/7/22","payee":"RDC Concrete","amount_words":"Five Lakhs Only","amount_numbers":"5,00,000","issuer_name":"BRIG K S BHOON"}"""
 
 
-def read_plate(img_bytes, media_type="image/jpeg"):
+def read_cheque(img_bytes, media_type="image/jpeg"):
     img_b64 = base64.standard_b64encode(img_bytes).decode("utf-8")
     message = get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=32,
+        max_tokens=512,
         messages=[
             {
                 "role": "user",
@@ -57,9 +64,11 @@ def read_plate(img_bytes, media_type="image/jpeg"):
             }
         ],
     )
-    raw = message.content[0].text.strip().upper()
-    text = "".join(c for c in raw if c.isalnum())
-    return text if text and text != "NONE" else None
+    raw = message.content[0].text.strip()
+    # Strip markdown code fences if Claude wraps the response
+    raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"\n?```$", "", raw, flags=re.MULTILINE)
+    return json.loads(raw.strip())
 
 
 def allowed_file(filename):
@@ -88,11 +97,10 @@ def predict():
     media_type = "image/jpeg" if ext in {"jpg", "jpeg"} else f"image/{ext}"
 
     try:
-        text = read_plate(img_bytes, media_type)
-        if text:
-            return jsonify({"plates": [{"text": text}], "count": 1})
-        else:
-            return jsonify({"plates": [], "count": 0})
+        data = read_cheque(img_bytes, media_type)
+        return jsonify({"cheque": data})
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"Could not parse cheque data: {e}"}), 500
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500

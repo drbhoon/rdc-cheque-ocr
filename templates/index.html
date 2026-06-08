@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Truck Plate OCR</title>
+  <title>Cheque Scanner</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -24,7 +24,7 @@
       border-radius: 16px;
       padding: 40px;
       width: 100%;
-      max-width: 560px;
+      max-width: 640px;
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     }
 
@@ -46,23 +46,13 @@
       font-size: 22px;
     }
 
-    .logo h1 {
-      font-size: 20px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-    }
+    .logo h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo p { font-size: 13px; color: #6b7280; margin-top: 2px; }
 
-    .logo p {
-      font-size: 13px;
-      color: #6b7280;
-      margin-top: 2px;
-    }
-
-    /* Drop zone */
     .drop-zone {
       border: 2px dashed #2d3148;
       border-radius: 12px;
-      padding: 40px 20px;
+      padding: 36px 20px;
       text-align: center;
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
@@ -84,40 +74,20 @@
       height: 100%;
     }
 
-    .drop-icon { font-size: 40px; margin-bottom: 12px; }
+    .drop-icon { font-size: 38px; margin-bottom: 10px; }
+    .drop-zone h2 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+    .drop-zone p { font-size: 13px; color: #6b7280; }
 
-    .drop-zone h2 {
-      font-size: 15px;
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-
-    .drop-zone p {
-      font-size: 13px;
-      color: #6b7280;
-    }
-
-    .preview-wrap {
-      margin-top: 16px;
-      display: none;
-    }
-
+    .preview-wrap { margin-top: 16px; display: none; }
     .preview-wrap img {
       width: 100%;
-      max-height: 220px;
+      max-height: 200px;
       object-fit: contain;
       border-radius: 8px;
       border: 1px solid #2d3148;
     }
+    .preview-name { font-size: 12px; color: #6b7280; margin-top: 8px; text-align: center; }
 
-    .preview-name {
-      font-size: 12px;
-      color: #6b7280;
-      margin-top: 8px;
-      text-align: center;
-    }
-
-    /* Button */
     .btn {
       margin-top: 20px;
       width: 100%;
@@ -136,11 +106,9 @@
     .btn:active:not(:disabled) { transform: scale(0.99); }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    /* Spinner */
     .spinner {
       display: inline-block;
-      width: 16px;
-      height: 16px;
+      width: 16px; height: 16px;
       border: 2px solid rgba(255,255,255,0.3);
       border-top-color: white;
       border-radius: 50%;
@@ -151,81 +119,119 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Results */
-    .result-section {
-      margin-top: 28px;
-      display: none;
+    /* Result section */
+    .result-section { margin-top: 28px; display: none; }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
     }
 
-    .result-section h3 {
+    .result-header h3 {
       font-size: 13px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.8px;
       color: #6b7280;
+    }
+
+    .copy-all-btn {
+      background: rgba(79, 110, 247, 0.12);
+      border: 1px solid rgba(79, 110, 247, 0.3);
+      border-radius: 6px;
+      color: #7c9bff;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .copy-all-btn:hover { background: rgba(79, 110, 247, 0.22); }
+
+    /* Field rows */
+    .field-row {
       margin-bottom: 12px;
     }
 
-    .plate-card {
+    .field-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: #6b7280;
+      margin-bottom: 5px;
+    }
+
+    .field-input-wrap {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .field-input {
+      flex: 1;
       background: #0f1117;
       border: 1px solid #2d3148;
-      border-radius: 10px;
-      padding: 18px 20px;
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #e2e8f0;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+      outline: none;
     }
 
-    .plate-text {
-      font-size: 26px;
-      font-weight: 800;
-      letter-spacing: 3px;
-      font-family: 'Courier New', monospace;
-      color: #f0f4ff;
-    }
+    .field-input:focus { border-color: #4f6ef7; }
+    .field-input.null-field { color: #4b5563; font-style: italic; }
 
-    .plate-meta {
-      text-align: right;
-      flex-shrink: 0;
-    }
-
-    .conf-badge {
-      display: inline-block;
-      font-size: 12px;
-      font-weight: 600;
-      padding: 3px 9px;
-      border-radius: 20px;
-      background: rgba(79, 110, 247, 0.15);
-      color: #7c9bff;
-      margin-bottom: 4px;
-    }
-
-    .conf-label {
-      font-size: 11px;
-      color: #6b7280;
-    }
-
-    .copy-btn {
+    .field-copy {
       background: none;
       border: 1px solid #2d3148;
       border-radius: 6px;
       color: #6b7280;
-      padding: 4px 10px;
+      padding: 8px 10px;
       font-size: 12px;
       cursor: pointer;
-      margin-top: 6px;
+      flex-shrink: 0;
       transition: color 0.2s, border-color 0.2s;
+      white-space: nowrap;
     }
 
-    .copy-btn:hover { color: #e2e8f0; border-color: #4f6ef7; }
+    .field-copy:hover { color: #e2e8f0; border-color: #4f6ef7; }
 
-    .no-plate {
-      text-align: center;
-      padding: 24px;
-      color: #6b7280;
-      font-size: 14px;
+    /* Amount match badge */
+    .amount-row { position: relative; }
+
+    .match-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      margin-top: 6px;
+    }
+
+    .match-badge.ok {
+      background: rgba(34, 197, 94, 0.12);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.25);
+    }
+
+    .match-badge.warn {
+      background: rgba(251, 191, 36, 0.12);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.25);
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2d3148;
+      margin: 0 0 20px;
     }
 
     .error-box {
@@ -237,27 +243,28 @@
       color: #f87171;
     }
 
-    .divider {
-      border: none;
-      border-top: 1px solid #2d3148;
-      margin: 28px 0 0;
+    .no-data {
+      text-align: center;
+      padding: 24px;
+      color: #6b7280;
+      font-size: 14px;
     }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="logo">
-      <div class="logo-icon">🚛</div>
+      <div class="logo-icon">🏦</div>
       <div>
-        <h1>Truck Plate OCR</h1>
-        <p>Upload a number plate image to extract text</p>
+        <h1>Cheque Scanner</h1>
+        <p>Upload a cheque image to extract and edit details</p>
       </div>
     </div>
 
     <div class="drop-zone" id="dropZone">
       <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp" />
-      <div class="drop-icon">📷</div>
-      <h2>Drop image here or click to browse</h2>
+      <div class="drop-icon">📄</div>
+      <h2>Drop cheque image here or click to browse</h2>
       <p>PNG, JPG, JPEG, WEBP, BMP — max 16 MB</p>
     </div>
 
@@ -266,28 +273,41 @@
       <div class="preview-name" id="previewName"></div>
     </div>
 
-    <button class="btn" id="submitBtn" disabled>
-      Detect Plate Number
-    </button>
+    <button class="btn" id="submitBtn" disabled>Scan Cheque</button>
 
     <div class="result-section" id="resultSection">
-      <hr class="divider" style="margin-bottom:28px; margin-top:0;" />
-      <h3>Detected Plates</h3>
+      <hr class="divider" />
+      <div class="result-header">
+        <h3>Extracted Details</h3>
+        <button class="copy-all-btn" id="copyAllBtn">Copy All as JSON</button>
+      </div>
       <div id="resultBody"></div>
     </div>
   </div>
 
   <script>
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
+    const dropZone    = document.getElementById('dropZone');
+    const fileInput   = document.getElementById('fileInput');
     const previewWrap = document.getElementById('previewWrap');
-    const previewImg = document.getElementById('previewImg');
+    const previewImg  = document.getElementById('previewImg');
     const previewName = document.getElementById('previewName');
-    const submitBtn = document.getElementById('submitBtn');
+    const submitBtn   = document.getElementById('submitBtn');
     const resultSection = document.getElementById('resultSection');
-    const resultBody = document.getElementById('resultBody');
+    const resultBody  = document.getElementById('resultBody');
+    const copyAllBtn  = document.getElementById('copyAllBtn');
 
     let selectedFile = null;
+    let lastChequeData = null;
+
+    const FIELDS = [
+      { key: 'bank_name',      label: 'Bank Name' },
+      { key: 'account_number', label: 'Account Number' },
+      { key: 'date',           label: 'Date' },
+      { key: 'payee',          label: 'Pay To' },
+      { key: 'amount_words',   label: 'Amount in Words' },
+      { key: 'amount_numbers', label: 'Amount in Numbers (₹)' },
+      { key: 'issuer_name',    label: 'Issuer Name' },
+    ];
 
     fileInput.addEventListener('change', () => {
       if (fileInput.files.length) loadPreview(fileInput.files[0]);
@@ -304,8 +324,7 @@
 
     function loadPreview(file) {
       selectedFile = file;
-      const url = URL.createObjectURL(file);
-      previewImg.src = url;
+      previewImg.src = URL.createObjectURL(file);
       previewName.textContent = file.name;
       previewWrap.style.display = 'block';
       submitBtn.disabled = false;
@@ -316,8 +335,9 @@
       if (!selectedFile) return;
 
       submitBtn.disabled = true;
-      submitBtn.innerHTML = '<span class="spinner"></span>Analyzing...';
+      submitBtn.innerHTML = '<span class="spinner"></span>Scanning…';
       resultSection.style.display = 'none';
+      lastChequeData = null;
 
       const formData = new FormData();
       formData.append('image', selectedFile);
@@ -330,22 +350,11 @@
 
         if (data.error) {
           resultBody.innerHTML = `<div class="error-box">⚠️ ${escHtml(data.error)}</div>`;
-        } else if (data.count === 0) {
-          resultBody.innerHTML = `<div class="no-plate">No license plates detected in this image.</div>`;
+        } else if (!data.cheque) {
+          resultBody.innerHTML = `<div class="no-data">No cheque data could be extracted.</div>`;
         } else {
-          data.plates.forEach(p => {
-            const detConf = p.detection_confidence ? Math.round(p.detection_confidence * 100) : null;
-            resultBody.innerHTML += `
-              <div class="plate-card">
-                <div>
-                  <div class="plate-text">${escHtml(p.text)}</div>
-                  <button class="copy-btn" onclick="copyText('${escHtml(p.text)}', this)">Copy</button>
-                </div>
-                <div class="plate-meta">
-                  ${detConf ? `<div class="conf-badge">${detConf}% detection</div><div class="conf-label">plate detected</div>` : '<div class="conf-badge">AI read</div>'}
-                </div>
-              </div>`;
-          });
+          lastChequeData = data.cheque;
+          renderFields(data.cheque);
         }
 
         resultSection.style.display = 'block';
@@ -354,19 +363,132 @@
         resultSection.style.display = 'block';
       } finally {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = 'Detect Plate Number';
+        submitBtn.innerHTML = 'Scan Cheque';
       }
     });
 
-    function escHtml(str) {
-      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    function renderFields(cheque) {
+      FIELDS.forEach(f => {
+        const val = cheque[f.key];
+        const isNull = val === null || val === undefined || val === '';
+        const displayVal = isNull ? '' : val;
+
+        const row = document.createElement('div');
+        row.className = 'field-row';
+        row.innerHTML = `
+          <div class="field-label">${escHtml(f.label)}</div>
+          <div class="field-input-wrap">
+            <input
+              class="field-input${isNull ? ' null-field' : ''}"
+              id="field-${f.key}"
+              type="text"
+              value="${escAttr(displayVal)}"
+              placeholder="${isNull ? 'Not detected' : ''}"
+              data-key="${f.key}"
+            />
+            <button class="field-copy" onclick="copyField('${f.key}', this)">Copy</button>
+          </div>`;
+        resultBody.appendChild(row);
+      });
+
+      // Live-sync edits back to lastChequeData
+      resultBody.querySelectorAll('.field-input').forEach(input => {
+        input.addEventListener('input', () => {
+          lastChequeData[input.dataset.key] = input.value;
+          input.classList.remove('null-field');
+          if (input.dataset.key === 'amount_words' || input.dataset.key === 'amount_numbers') {
+            updateMatchBadge();
+          }
+        });
+      });
+
+      // Amount match badge (appended after amount_numbers row)
+      const badge = document.createElement('div');
+      badge.id = 'matchBadge';
+      resultBody.appendChild(badge);
+      updateMatchBadge();
     }
 
-    function copyText(text, btn) {
-      navigator.clipboard.writeText(text).then(() => {
+    function updateMatchBadge() {
+      const badge = document.getElementById('matchBadge');
+      if (!badge) return;
+      const words = (document.getElementById('field-amount_words')?.value || '').trim();
+      const nums  = (document.getElementById('field-amount_numbers')?.value || '').trim();
+      if (!words || !nums) { badge.innerHTML = ''; return; }
+
+      const parsed = parseWordsToNumber(words);
+      const numVal  = parseIndianNumber(nums);
+
+      if (parsed !== null && numVal !== null) {
+        const match = parsed === numVal;
+        badge.innerHTML = match
+          ? `<span class="match-badge ok">✓ Amounts match (₹${numVal.toLocaleString('en-IN')})</span>`
+          : `<span class="match-badge warn">⚠ Mismatch — words suggest ₹${parsed.toLocaleString('en-IN')}, number shows ₹${numVal.toLocaleString('en-IN')}</span>`;
+      } else {
+        badge.innerHTML = `<span class="match-badge warn">⚠ Verify amounts manually</span>`;
+      }
+    }
+
+    function parseIndianNumber(str) {
+      const clean = str.replace(/[,\s₹]/g, '');
+      const n = Number(clean);
+      return isNaN(n) ? null : n;
+    }
+
+    function parseWordsToNumber(words) {
+      const w = words.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+      const map = {
+        zero:0, one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9,
+        ten:10, eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16,
+        seventeen:17, eighteen:18, nineteen:19, twenty:20, thirty:30, forty:40, fifty:50,
+        sixty:60, seventy:70, eighty:80, ninety:90,
+        hundred:100, thousand:1000, lakh:100000, lakhs:100000, lac:100000,
+        crore:10000000, crores:10000000
+      };
+      const tokens = w.split(/\s+/).filter(t => t && t !== 'and' && t !== 'only' && t !== 'rupees');
+      let total = 0, current = 0;
+      for (const t of tokens) {
+        const v = map[t];
+        if (v === undefined) return null;
+        if (v === 100) { current = (current || 1) * 100; }
+        else if (v >= 1000) {
+          total += (current || 1) * v;
+          current = 0;
+        } else {
+          current += v;
+        }
+      }
+      return total + current || null;
+    }
+
+    copyAllBtn.addEventListener('click', () => {
+      if (!lastChequeData) return;
+      const out = {};
+      FIELDS.forEach(f => {
+        out[f.label] = document.getElementById('field-' + f.key)?.value || lastChequeData[f.key] || null;
+      });
+      navigator.clipboard.writeText(JSON.stringify(out, null, 2)).then(() => {
+        copyAllBtn.textContent = 'Copied!';
+        setTimeout(() => copyAllBtn.textContent = 'Copy All as JSON', 2000);
+      });
+    });
+
+    function copyField(key, btn) {
+      const val = document.getElementById('field-' + key)?.value || '';
+      navigator.clipboard.writeText(val).then(() => {
         btn.textContent = 'Copied!';
         setTimeout(() => btn.textContent = 'Copy', 1800);
       });
+    }
+
+    function escHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function escAttr(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
   </script>
 </body>
