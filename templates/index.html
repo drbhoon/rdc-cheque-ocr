@@ -13,290 +13,278 @@
       color: #e2e8f0;
       min-height: 100vh;
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      padding: 24px;
+      justify-content: flex-start;
+      padding: 24px 16px 48px;
     }
 
     .card {
       background: #1a1d27;
       border: 1px solid #2d3148;
       border-radius: 16px;
-      padding: 40px;
+      padding: 32px 28px;
       width: 100%;
       max-width: 640px;
       box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     }
 
-    .logo {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 32px;
-    }
-
+    /* ── Header ── */
+    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
     .logo-icon {
-      width: 44px;
-      height: 44px;
+      width: 44px; height: 44px;
       background: linear-gradient(135deg, #4f6ef7, #7c3aed);
       border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; flex-shrink: 0;
     }
-
     .logo h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
-    .logo p { font-size: 13px; color: #6b7280; margin-top: 2px; }
+    .logo p  { font-size: 13px; color: #6b7280; margin-top: 2px; }
 
+    /* ── Upload section ── */
     .drop-zone {
       border: 2px dashed #2d3148;
       border-radius: 12px;
-      padding: 36px 20px;
+      padding: 32px 20px;
       text-align: center;
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
       position: relative;
     }
-
-    .drop-zone:hover,
-    .drop-zone.dragover {
+    .drop-zone:hover, .drop-zone.dragover {
       border-color: #4f6ef7;
-      background: rgba(79, 110, 247, 0.05);
+      background: rgba(79,110,247,0.05);
     }
-
     .drop-zone input[type="file"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
+      position: absolute; inset: 0; opacity: 0;
+      cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon { font-size: 36px; margin-bottom: 10px; }
+    .drop-zone h2 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+    .drop-zone p  { font-size: 13px; color: #6b7280; }
+
+    /* ── Camera button (mobile) ── */
+    .camera-row {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 12px;
+    }
+    .camera-divider {
+      flex: 1; height: 1px; background: #2d3148;
+    }
+    .camera-btn {
+      position: relative;
+      display: flex; align-items: center; gap: 7px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      color: #a5b4fc;
+      padding: 9px 18px;
+      font-size: 13px; font-weight: 600;
       cursor: pointer;
-      width: 100%;
-      height: 100%;
+      transition: border-color 0.2s, background 0.2s;
+      white-space: nowrap;
+    }
+    .camera-btn:hover { border-color: #4f6ef7; background: rgba(79,110,247,0.07); }
+    .camera-btn input[type="file"] {
+      position: absolute; inset: 0; opacity: 0;
+      cursor: pointer; width: 100%; height: 100%;
     }
 
-    .drop-icon { font-size: 38px; margin-bottom: 10px; }
-    .drop-zone h2 { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
-    .drop-zone p { font-size: 13px; color: #6b7280; }
-
-    .preview-wrap { margin-top: 16px; display: none; }
+    /* ── Preview ── */
+    .preview-wrap { margin-top: 14px; display: none; }
     .preview-wrap img {
-      width: 100%;
-      max-height: 200px;
-      object-fit: contain;
-      border-radius: 8px;
+      width: 100%; max-height: 200px;
+      object-fit: contain; border-radius: 8px;
       border: 1px solid #2d3148;
     }
-    .preview-name { font-size: 12px; color: #6b7280; margin-top: 8px; text-align: center; }
+    .preview-name { font-size: 12px; color: #6b7280; margin-top: 6px; text-align: center; }
 
+    /* ── Buttons ── */
     .btn {
-      margin-top: 20px;
-      width: 100%;
+      margin-top: 16px; width: 100%;
       padding: 13px;
       background: linear-gradient(135deg, #4f6ef7, #7c3aed);
-      border: none;
-      border-radius: 10px;
-      color: white;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity 0.2s, transform 0.1s;
+      border: none; border-radius: 10px;
+      color: white; font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s, transform 0.1s;
     }
-
     .btn:hover:not(:disabled) { opacity: 0.9; }
     .btn:active:not(:disabled) { transform: scale(0.99); }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    .spinner {
-      display: inline-block;
-      width: 16px; height: 16px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-top-color: white;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      vertical-align: middle;
-      margin-right: 8px;
+    .btn-accept {
+      margin-top: 20px; width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, #059669, #047857);
+      border: none; border-radius: 10px;
+      color: white; font-size: 15px; font-weight: 600;
+      cursor: pointer; transition: opacity 0.2s, transform 0.1s;
     }
+    .btn-accept:hover:not(:disabled) { opacity: 0.9; }
+    .btn-accept:active:not(:disabled) { transform: scale(0.99); }
+    .btn-accept:disabled { opacity: 0.45; cursor: not-allowed; }
 
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white; border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Result section */
-    .result-section { margin-top: 28px; display: none; }
+    /* ── Result section ── */
+    .result-section { margin-top: 24px; display: none; }
+    .divider { border: none; border-top: 1px solid #2d3148; margin: 0 0 20px; }
 
-    .result-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-    }
-
-    .result-header h3 {
-      font-size: 13px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: #6b7280;
-    }
-
-    .copy-all-btn {
-      background: rgba(79, 110, 247, 0.12);
-      border: 1px solid rgba(79, 110, 247, 0.3);
-      border-radius: 6px;
-      color: #7c9bff;
-      padding: 5px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-
-    .copy-all-btn:hover { background: rgba(79, 110, 247, 0.22); }
-
-    /* Field rows */
-    .field-row {
-      margin-bottom: 12px;
-    }
-
+    .field-row { margin-bottom: 12px; }
     .field-label {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.7px;
-      color: #6b7280;
-      margin-bottom: 5px;
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.7px;
+      color: #6b7280; margin-bottom: 5px;
     }
-
-    .field-input-wrap {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
+    .field-input-wrap { display: flex; gap: 8px; align-items: center; }
     .field-input {
-      flex: 1;
-      background: #0f1117;
-      border: 1px solid #2d3148;
-      border-radius: 8px;
-      padding: 10px 14px;
-      color: #e2e8f0;
-      font-size: 14px;
-      font-family: inherit;
-      transition: border-color 0.2s;
-      outline: none;
+      flex: 1; background: #0f1117;
+      border: 1px solid #2d3148; border-radius: 8px;
+      padding: 10px 14px; color: #e2e8f0;
+      font-size: 14px; font-family: inherit;
+      transition: border-color 0.2s; outline: none;
     }
-
     .field-input:focus { border-color: #4f6ef7; }
     .field-input.null-field { color: #4b5563; font-style: italic; }
-
     .field-copy {
-      background: none;
-      border: 1px solid #2d3148;
-      border-radius: 6px;
-      color: #6b7280;
-      padding: 8px 10px;
-      font-size: 12px;
-      cursor: pointer;
-      flex-shrink: 0;
+      background: none; border: 1px solid #2d3148;
+      border-radius: 6px; color: #6b7280;
+      padding: 8px 10px; font-size: 12px;
+      cursor: pointer; flex-shrink: 0;
       transition: color 0.2s, border-color 0.2s;
-      white-space: nowrap;
     }
-
     .field-copy:hover { color: #e2e8f0; border-color: #4f6ef7; }
 
-    /* Amount match badge */
-    .amount-row { position: relative; }
-
+    /* ── Amount badge ── */
     .match-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 3px 9px;
-      border-radius: 20px;
-      margin-top: 6px;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; font-weight: 600;
+      padding: 3px 9px; border-radius: 20px; margin-top: 6px;
     }
+    .match-badge.ok   { background: rgba(34,197,94,0.12);  color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
+    .match-badge.warn { background: rgba(251,191,36,0.12); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
 
-    .match-badge.ok {
-      background: rgba(34, 197, 94, 0.12);
-      color: #4ade80;
-      border: 1px solid rgba(34, 197, 94, 0.25);
-    }
-
-    .match-badge.warn {
-      background: rgba(251, 191, 36, 0.12);
-      color: #fbbf24;
-      border: 1px solid rgba(251, 191, 36, 0.25);
-    }
-
-    .divider {
-      border: none;
-      border-top: 1px solid #2d3148;
-      margin: 0 0 20px;
-    }
-
+    /* ── Error ── */
     .error-box {
-      background: rgba(239, 68, 68, 0.1);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      border-radius: 10px;
-      padding: 14px 18px;
-      font-size: 14px;
-      color: #f87171;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 10px; padding: 14px 18px;
+      font-size: 14px; color: #f87171;
     }
 
-    .no-data {
-      text-align: center;
-      padding: 24px;
-      color: #6b7280;
-      font-size: 14px;
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      background: #059669; color: white;
+      padding: 12px 28px; border-radius: 10px;
+      font-size: 14px; font-weight: 600;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 999; white-space: nowrap;
     }
+    .toast.show { opacity: 1; }
+    .toast.error-toast { background: #dc2626; }
+
+    /* ── Footer: Download Excel ── */
+    .footer-bar {
+      margin-top: 28px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .download-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(5,150,105,0.1);
+      border: 1px solid rgba(5,150,105,0.35);
+      border-radius: 8px; color: #34d399;
+      padding: 9px 20px; font-size: 13px; font-weight: 600;
+      text-decoration: none; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .download-btn:hover { background: rgba(5,150,105,0.2); }
   </style>
 </head>
 <body>
   <div class="card">
+    <!-- Header -->
     <div class="logo">
       <div class="logo-icon">🏦</div>
       <div>
         <h1>Cheque Scanner</h1>
-        <p>Upload a cheque image to extract and edit details</p>
+        <p>Scan, verify and save cheque details</p>
       </div>
     </div>
 
+    <!-- Drop zone (desktop / gallery pick) -->
     <div class="drop-zone" id="dropZone">
-      <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/bmp" />
+      <input type="file" id="fileInput" accept="image/*" />
       <div class="drop-icon">📄</div>
       <h2>Drop cheque image here or click to browse</h2>
-      <p>PNG, JPG, JPEG, WEBP, BMP — max 16 MB</p>
+      <p>PNG, JPG, WEBP, BMP — max 16 MB</p>
     </div>
 
+    <!-- Camera row (useful on mobile) -->
+    <div class="camera-row">
+      <div class="camera-divider"></div>
+      <button class="camera-btn" type="button">
+        📷 Take Photo
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" />
+      </button>
+      <div class="camera-divider"></div>
+    </div>
+
+    <!-- Preview -->
     <div class="preview-wrap" id="previewWrap">
-      <img id="previewImg" src="" alt="Preview" />
+      <img id="previewImg" src="" alt="Cheque preview" />
       <div class="preview-name" id="previewName"></div>
     </div>
 
+    <!-- Scan button -->
     <button class="btn" id="submitBtn" disabled>Scan Cheque</button>
 
+    <!-- Result / editable fields -->
     <div class="result-section" id="resultSection">
       <hr class="divider" />
-      <div class="result-header">
-        <h3>Extracted Details</h3>
-        <button class="copy-all-btn" id="copyAllBtn">Copy All as JSON</button>
-      </div>
       <div id="resultBody"></div>
+
+      <!-- Accept & Save -->
+      <button class="btn-accept" id="acceptBtn" style="display:none;">
+        ✅ Accept &amp; Save
+      </button>
     </div>
   </div>
 
-  <script>
-    const dropZone    = document.getElementById('dropZone');
-    const fileInput   = document.getElementById('fileInput');
-    const previewWrap = document.getElementById('previewWrap');
-    const previewImg  = document.getElementById('previewImg');
-    const previewName = document.getElementById('previewName');
-    const submitBtn   = document.getElementById('submitBtn');
-    const resultSection = document.getElementById('resultSection');
-    const resultBody  = document.getElementById('resultBody');
-    const copyAllBtn  = document.getElementById('copyAllBtn');
+  <!-- Download Excel — always visible below card -->
+  <div class="footer-bar">
+    <a class="download-btn" href="/export" target="_blank">
+      📥 Download All Records (Excel)
+    </a>
+  </div>
 
-    let selectedFile = null;
+  <!-- Toast notification -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const dropZone     = document.getElementById('dropZone');
+    const fileInput    = document.getElementById('fileInput');
+    const cameraInput  = document.getElementById('cameraInput');
+    const previewWrap  = document.getElementById('previewWrap');
+    const previewImg   = document.getElementById('previewImg');
+    const previewName  = document.getElementById('previewName');
+    const submitBtn    = document.getElementById('submitBtn');
+    const resultSection= document.getElementById('resultSection');
+    const resultBody   = document.getElementById('resultBody');
+    const acceptBtn    = document.getElementById('acceptBtn');
+    const toast        = document.getElementById('toast');
+
+    let selectedFile   = null;
     let lastChequeData = null;
 
     const FIELDS = [
@@ -309,17 +297,21 @@
       { key: 'issuer_name',    label: 'Issuer Name' },
     ];
 
+    // ── File selection ──────────────────────────────────────────────────────
+
     fileInput.addEventListener('change', () => {
-      if (fileInput.files.length) loadPreview(fileInput.files[0]);
+      if (fileInput.files[0]) loadPreview(fileInput.files[0]);
+    });
+
+    cameraInput.addEventListener('change', () => {
+      if (cameraInput.files[0]) loadPreview(cameraInput.files[0]);
     });
 
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
     dropZone.addEventListener('drop', e => {
-      e.preventDefault();
-      dropZone.classList.remove('dragover');
-      const file = e.dataTransfer.files[0];
-      if (file) loadPreview(file);
+      e.preventDefault(); dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) loadPreview(e.dataTransfer.files[0]);
     });
 
     function loadPreview(file) {
@@ -329,7 +321,12 @@
       previewWrap.style.display = 'block';
       submitBtn.disabled = false;
       resultSection.style.display = 'none';
+      acceptBtn.style.display = 'none';
+      resultBody.innerHTML = '';
+      lastChequeData = null;
     }
+
+    // ── Scan ────────────────────────────────────────────────────────────────
 
     submitBtn.addEventListener('click', async () => {
       if (!selectedFile) return;
@@ -337,28 +334,29 @@
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<span class="spinner"></span>Scanning…';
       resultSection.style.display = 'none';
+      acceptBtn.style.display = 'none';
+      resultBody.innerHTML = '';
       lastChequeData = null;
 
       const formData = new FormData();
       formData.append('image', selectedFile);
 
       try {
-        const res = await fetch('/predict', { method: 'POST', body: formData });
+        const res  = await fetch('/predict', { method: 'POST', body: formData });
         const data = await res.json();
-
-        resultBody.innerHTML = '';
 
         if (data.error) {
           resultBody.innerHTML = `<div class="error-box">⚠️ ${escHtml(data.error)}</div>`;
         } else if (!data.cheque) {
-          resultBody.innerHTML = `<div class="no-data">No cheque data could be extracted.</div>`;
+          resultBody.innerHTML = `<div style="text-align:center;padding:24px;color:#6b7280;font-size:14px;">No cheque data could be extracted.</div>`;
         } else {
-          lastChequeData = data.cheque;
+          lastChequeData = { ...data.cheque };
           renderFields(data.cheque);
+          acceptBtn.style.display = 'block';
         }
 
         resultSection.style.display = 'block';
-      } catch (err) {
+      } catch {
         resultBody.innerHTML = `<div class="error-box">⚠️ Request failed. Is the server running?</div>`;
         resultSection.style.display = 'block';
       } finally {
@@ -367,52 +365,54 @@
       }
     });
 
+    // ── Render editable fields ──────────────────────────────────────────────
+
     function renderFields(cheque) {
+      resultBody.innerHTML = '';
+
       FIELDS.forEach(f => {
-        const val = cheque[f.key];
-        const isNull = val === null || val === undefined || val === '';
-        const displayVal = isNull ? '' : val;
+        const val     = cheque[f.key];
+        const isNull  = val === null || val === undefined || val === '';
+        const display = isNull ? '' : val;
 
         const row = document.createElement('div');
         row.className = 'field-row';
         row.innerHTML = `
           <div class="field-label">${escHtml(f.label)}</div>
           <div class="field-input-wrap">
-            <input
-              class="field-input${isNull ? ' null-field' : ''}"
-              id="field-${f.key}"
-              type="text"
-              value="${escAttr(displayVal)}"
+            <input class="field-input${isNull ? ' null-field' : ''}"
+              id="field-${f.key}" type="text"
+              value="${escAttr(display)}"
               placeholder="${isNull ? 'Not detected' : ''}"
-              data-key="${f.key}"
-            />
-            <button class="field-copy" onclick="copyField('${f.key}', this)">Copy</button>
+              data-key="${f.key}" />
+            <button class="field-copy" onclick="copyField('${f.key}',this)">Copy</button>
           </div>`;
         resultBody.appendChild(row);
       });
 
-      // Live-sync edits back to lastChequeData
-      resultBody.querySelectorAll('.field-input').forEach(input => {
-        input.addEventListener('input', () => {
-          lastChequeData[input.dataset.key] = input.value;
-          input.classList.remove('null-field');
-          if (input.dataset.key === 'amount_words' || input.dataset.key === 'amount_numbers') {
+      // Live sync edits → lastChequeData
+      resultBody.querySelectorAll('.field-input').forEach(inp => {
+        inp.addEventListener('input', () => {
+          lastChequeData[inp.dataset.key] = inp.value;
+          inp.classList.remove('null-field');
+          if (inp.dataset.key === 'amount_words' || inp.dataset.key === 'amount_numbers')
             updateMatchBadge();
-          }
         });
       });
 
-      // Amount match badge (appended after amount_numbers row)
+      // Amount match badge
       const badge = document.createElement('div');
       badge.id = 'matchBadge';
       resultBody.appendChild(badge);
       updateMatchBadge();
     }
 
+    // ── Amount match ────────────────────────────────────────────────────────
+
     function updateMatchBadge() {
       const badge = document.getElementById('matchBadge');
       if (!badge) return;
-      const words = (document.getElementById('field-amount_words')?.value || '').trim();
+      const words = (document.getElementById('field-amount_words')?.value  || '').trim();
       const nums  = (document.getElementById('field-amount_numbers')?.value || '').trim();
       if (!words || !nums) { badge.innerHTML = ''; return; }
 
@@ -420,58 +420,116 @@
       const numVal  = parseIndianNumber(nums);
 
       if (parsed !== null && numVal !== null) {
-        const match = parsed === numVal;
-        badge.innerHTML = match
-          ? `<span class="match-badge ok">✓ Amounts match (₹${numVal.toLocaleString('en-IN')})</span>`
-          : `<span class="match-badge warn">⚠ Mismatch — words suggest ₹${parsed.toLocaleString('en-IN')}, number shows ₹${numVal.toLocaleString('en-IN')}</span>`;
+        badge.innerHTML = parsed === numVal
+          ? `<span class="match-badge ok">✓ Amounts match — ₹${numVal.toLocaleString('en-IN')}</span>`
+          : `<span class="match-badge warn">⚠ Mismatch — words ≈ ₹${parsed.toLocaleString('en-IN')} · number = ₹${numVal.toLocaleString('en-IN')}</span>`;
       } else {
         badge.innerHTML = `<span class="match-badge warn">⚠ Verify amounts manually</span>`;
       }
     }
 
     function parseIndianNumber(str) {
-      const clean = str.replace(/[,\s₹]/g, '');
-      const n = Number(clean);
+      const n = Number(str.replace(/[,\s₹]/g, ''));
       return isNaN(n) ? null : n;
     }
 
     function parseWordsToNumber(words) {
       const w = words.toLowerCase().replace(/[^a-z\s]/g, '').trim();
       const map = {
-        zero:0, one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9,
-        ten:10, eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16,
-        seventeen:17, eighteen:18, nineteen:19, twenty:20, thirty:30, forty:40, fifty:50,
-        sixty:60, seventy:70, eighty:80, ninety:90,
-        hundred:100, thousand:1000, lakh:100000, lakhs:100000, lac:100000,
-        crore:10000000, crores:10000000
+        zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+        ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,
+        seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,
+        sixty:60,seventy:70,eighty:80,ninety:90,
+        hundred:100,thousand:1000,lakh:100000,lakhs:100000,lac:100000,lacs:100000,
+        crore:10000000,crores:10000000
       };
-      const tokens = w.split(/\s+/).filter(t => t && t !== 'and' && t !== 'only' && t !== 'rupees');
+      const tokens = w.split(/\s+/).filter(t => t && !['and','only','rupees','rs'].includes(t));
       let total = 0, current = 0;
       for (const t of tokens) {
         const v = map[t];
         if (v === undefined) return null;
-        if (v === 100) { current = (current || 1) * 100; }
-        else if (v >= 1000) {
-          total += (current || 1) * v;
-          current = 0;
-        } else {
-          current += v;
-        }
+        if (v === 100)        { current = (current || 1) * 100; }
+        else if (v >= 1000)   { total += (current || 1) * v; current = 0; }
+        else                  { current += v; }
       }
       return total + current || null;
     }
 
-    copyAllBtn.addEventListener('click', () => {
+    // ── Accept & Save ───────────────────────────────────────────────────────
+
+    acceptBtn.addEventListener('click', async () => {
       if (!lastChequeData) return;
-      const out = {};
+
+      // Collect current (possibly edited) values from inputs
+      const payload = {};
       FIELDS.forEach(f => {
-        out[f.label] = document.getElementById('field-' + f.key)?.value || lastChequeData[f.key] || null;
+        payload[f.key] = document.getElementById('field-' + f.key)?.value?.trim() || null;
       });
-      navigator.clipboard.writeText(JSON.stringify(out, null, 2)).then(() => {
-        copyAllBtn.textContent = 'Copied!';
-        setTimeout(() => copyAllBtn.textContent = 'Copy All as JSON', 2000);
-      });
+
+      acceptBtn.disabled = true;
+      acceptBtn.innerHTML = '<span class="spinner"></span>Saving…';
+
+      try {
+        const res  = await fetch('/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          showToast('✓ Saved successfully! Ready for next cheque.', false);
+          resetAll();          // ← clear everything from screen
+        } else {
+          showToast('⚠ Save failed: ' + (data.error || 'Unknown error'), true);
+          acceptBtn.disabled = false;
+          acceptBtn.innerHTML = '✅ Accept &amp; Save';
+        }
+      } catch {
+        showToast('⚠ Network error — could not save.', true);
+        acceptBtn.disabled = false;
+        acceptBtn.innerHTML = '✅ Accept &amp; Save';
+      }
     });
+
+    // ── Reset screen ────────────────────────────────────────────────────────
+
+    function resetAll() {
+      // Clear image preview
+      previewWrap.style.display  = 'none';
+      previewImg.src             = '';
+      previewName.textContent    = '';
+
+      // Clear result section
+      resultSection.style.display = 'none';
+      resultBody.innerHTML        = '';
+      acceptBtn.style.display     = 'none';
+      acceptBtn.disabled          = false;
+      acceptBtn.innerHTML         = '✅ Accept &amp; Save';
+
+      // Reset file inputs so same file can be picked again if needed
+      fileInput.value   = '';
+      cameraInput.value = '';
+
+      // Reset state
+      selectedFile    = null;
+      lastChequeData  = null;
+
+      // Disable scan button until new file chosen
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = 'Scan Cheque';
+    }
+
+    // ── Toast ───────────────────────────────────────────────────────────────
+
+    function showToast(msg, isError = false) {
+      toast.textContent = msg;
+      toast.classList.toggle('error-toast', isError);
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3500);
+    }
+
+    // ── Copy helpers ─────────────────────────────────────────────────────────
 
     function copyField(key, btn) {
       const val = document.getElementById('field-' + key)?.value || '';
@@ -482,13 +540,10 @@
     }
 
     function escHtml(str) {
-      if (!str) return '';
-      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
-
     function escAttr(str) {
-      if (!str) return '';
-      return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      return String(str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
   </script>
 </body>
