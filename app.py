@@ -341,6 +341,7 @@ def staff_upload():
         cur.close()
         return jsonify({"success": True, "saved": saved})
     except Exception as e:
+        conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()

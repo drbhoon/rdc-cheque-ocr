@@ -64,17 +64,28 @@
     const file=document.getElementById('file'), upBtn=document.getElementById('upBtn'),
       fname=document.getElementById('fname'), msg=document.getElementById('msg');
     let selected=null;
-    file.addEventListener('change',()=>{ if(file.files[0]){ selected=file.files[0]; fname.textContent=selected.name; upBtn.disabled=false; } });
+    file.addEventListener('change',()=>{ if(file.files[0]){ selected=file.files[0]; fname.textContent=selected.name; upBtn.disabled=false; msg.className='msg'; } });
+
+    function resetForm(){
+      file.value='';            // allow re-selecting the same (fixed) file
+      selected=null;
+      fname.textContent='';
+      upBtn.disabled=true;
+      upBtn.innerHTML='Upload &amp; Replace';
+    }
+
     upBtn.addEventListener('click', async ()=>{
       if(!selected) return;
       upBtn.disabled=true; upBtn.innerHTML='<span class="spinner"></span>Uploading…'; msg.className='msg';
       const fd=new FormData(); fd.append('file',selected);
+      let timer=setTimeout(()=>{ msg.className='msg err'; msg.textContent='⚠ Upload timed out. Please try again.'; resetForm(); }, 60000);
       try{
         const res=await fetch('/staff/upload',{method:'POST',body:fd});
+        clearTimeout(timer);
         const data=await res.json();
         if(data.success){ msg.className='msg ok'; msg.textContent=`✓ ${data.saved} staff record(s) loaded.`; setTimeout(()=>location.reload(),1200); }
-        else { msg.className='msg err'; msg.textContent='⚠ '+(data.error||'Upload failed'); upBtn.disabled=false; upBtn.innerHTML='Upload &amp; Replace'; }
-      }catch{ msg.className='msg err'; msg.textContent='⚠ Network error'; upBtn.disabled=false; upBtn.innerHTML='Upload &amp; Replace'; }
+        else { msg.className='msg err'; msg.textContent='⚠ '+(data.error||'Upload failed')+' — fix the file and upload again.'; resetForm(); }
+      }catch{ clearTimeout(timer); msg.className='msg err'; msg.textContent='⚠ Network error — please try again.'; resetForm(); }
     });
   </script>
 </body>
