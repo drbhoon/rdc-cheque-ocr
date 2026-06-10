@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cheque Clearing Report</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; padding: 24px 16px 60px; }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+    .topbar h1 { font-size: 22px; font-weight: 700; }
+    .topbar .links a { color: #7c9bff; text-decoration: none; margin-left: 16px; font-size: 13px; }
+    .topbar .links a:hover { text-decoration: underline; }
+    .today { font-size: 13px; color: #6b7280; }
+
+    .group { margin-bottom: 30px; }
+    .group-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+    .group-head h2 { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .count-pill { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 20px; background: #2d3148; color: #cbd5e1; }
+    .group-total { font-size: 13px; color: #94a3b8; }
+
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .overdue   .dot { background: #ef4444; }
+    .soon      .dot { background: #f59e0b; }
+    .upcoming  .dot { background: #4f6ef7; }
+    .undated   .dot { background: #6b7280; }
+
+    table { width: 100%; border-collapse: collapse; background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid #2d3148; vertical-align: middle; }
+    th { background: #161922; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    tr:last-child td { border-bottom: none; }
+    td.amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .muted { color: #6b7280; }
+    .stale-tag { font-size: 10px; font-weight: 700; color: #fca5a5; background: rgba(239,68,68,0.12); padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+    .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+    .badge.PENDING { background: rgba(79,110,247,0.15); color: #93b0ff; }
+    .badge.BOUNCED { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .act {
+      border: 1px solid #2d3148; background: #0f1117; color: #cbd5e1; border-radius: 6px;
+      padding: 5px 10px; font-size: 12px; cursor: pointer; transition: border-color .2s, color .2s;
+    }
+    .act:hover { border-color: #4f6ef7; color: #fff; }
+    .act.deposit { color: #4ade80; }
+    .act.bounce  { color: #fca5a5; }
+    .act.redeposit { color: #93b0ff; }
+
+    .empty { padding: 18px; text-align: center; color: #6b7280; font-size: 13px; background: #1a1d27; border: 1px dashed #2d3148; border-radius: 10px; }
+
+    /* Modal */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+    .modal-bg.show { display: flex; }
+    .modal { background: #1a1d27; border: 1px solid #2d3148; border-radius: 14px; padding: 24px; width: 100%; max-width: 380px; }
+    .modal h3 { font-size: 16px; margin-bottom: 16px; }
+    .modal label { display: block; font-size: 12px; color: #94a3b8; margin: 12px 0 5px; }
+    .modal input { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+    .modal input:focus { border-color: #4f6ef7; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .modal-actions button { flex: 1; padding: 10px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn-cancel { background: #2d3148; color: #cbd5e1; }
+    .btn-confirm { background: linear-gradient(135deg, #059669, #047857); color: white; }
+
+    .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); background: #059669; color: white; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 200; }
+    .toast.show { opacity: 1; } .toast.error-toast { background: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <h1>📋 Cheque Clearing Report</h1>
+      <div class="links">
+        <span class="today">Today: {{ today }}</span>
+        <a href="/">＋ Scan</a>
+        <a href="/export" target="_blank">📥 Excel</a>
+      </div>
+    </div>
+
+    {% for title, cls, rows in groups %}
+    <div class="group {{ cls }}">
+      <div class="group-head">
+        <h2><span class="dot"></span> {{ title }} <span class="count-pill">{{ rows|length }}</span></h2>
+        {% if rows %}<div class="group-total">Total: ₹ {{ '{:,.0f}'.format(total(rows)) }}</div>{% endif %}
+      </div>
+      {% if rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>Due Date</th><th>Bank</th><th>Cheque No</th><th>Pay To</th>
+            <th>Sales / Plant</th><th style="text-align:right;">Amount (₹)</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.deposit_due_date or '—' }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
+            <td>{{ r.bank_name or '—' }}<div class="muted">{{ r.account_number or '' }}</div></td>
+            <td>{{ r.cheque_number or '—' }}</td>
+            <td>{{ r.payee or '—' }}</td>
+            <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
+            <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
+            <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+            <td>
+              <div class="actions">
+                {% if r.status == 'BOUNCED' %}
+                  <button class="act redeposit" onclick="openModal('redeposit',{{ r.id }})">Re-deposit</button>
+                {% else %}
+                  <button class="act deposit" onclick="openModal('deposit',{{ r.id }})">Deposited</button>
+                  <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">No cheques in this group.</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Action modal -->
+  <div class="modal-bg" id="modalBg">
+    <div class="modal">
+      <h3 id="modalTitle">Mark Deposited</h3>
+      <div id="modalFields"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="btn-confirm" id="modalConfirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const today = "{{ today }}";
+    let current = { action:null, id:null };
+
+    function openModal(action, id){
+      current = { action, id };
+      const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced' };
+      document.getElementById('modalTitle').textContent = titles[action];
+      const f = document.getElementById('modalFields');
+      if(action === 'bounce'){
+        f.innerHTML = `<label>Bounce Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Reason</label><input id="m-reason" type="text" placeholder="e.g. Insufficient funds" />`;
+      } else {
+        f.innerHTML = `<label>Deposit Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Deposited Into (Bank / A/c)</label><input id="m-bank" type="text" placeholder="e.g. HDFC Current A/c" />
+                       <label>Reference / Slip No.</label><input id="m-ref" type="text" placeholder="optional" />`;
+      }
+      document.getElementById('modalBg').classList.add('show');
+    }
+    function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+
+    document.getElementById('modalConfirm').addEventListener('click', async ()=>{
+      const { action, id } = current;
+      const body = { date: document.getElementById('m-date')?.value };
+      if(action === 'bounce'){ body.reason = document.getElementById('m-reason')?.value; }
+      else { body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
+      const url = `/cheque/${id}/${action}`;
+      try{
+        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const data = await res.json();
+        if(data.success){ showToast('✓ Updated'); setTimeout(()=>location.reload(), 700); }
+        else showToast('⚠ '+(data.error||'Failed'), true);
+      }catch{ showToast('⚠ Network error', true); }
+      closeModal();
+    });
+
+    function showToast(msg, err=false){
+      const t=document.getElementById('toast');
+      t.textContent=msg; t.classList.toggle('error-toast',err);
+      t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2500);
+    }
+    document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
+  </script>
+</body>
+</html>
