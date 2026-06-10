@@ -282,6 +282,14 @@
       </div>`;
       html += `<div id="matchBadge"></div>`;
 
+      // Physical location of the cheque
+      html += `<div class="field-row"><div class="field-label">Cheque Location</div>
+        <select class="field-select" id="f-cheque_location">
+          <option value="Customer">Customer</option>
+          <option value="RDC Accounts">RDC Accounts</option>
+          <option value="RDC Sales">RDC Sales</option>
+        </select></div>`;
+
       // Staff
       html += `<div class="section-title">Responsible Staff</div>`;
       html += `<div class="field-row"><div class="field-label">Sales Person</div>
@@ -346,6 +354,7 @@
       payload.cheque_date_iso  = $('f-cheque_date_iso')?.value||null;
       payload.deposit_due_date = $('f-deposit_due_date')?.value||null;
       payload.date             = cheque.date || $('f-cheque_date_iso')?.value || null;
+      payload.cheque_location  = $('f-cheque_location')?.value||'Customer';
       payload.sales_name = $('f-sales_name')?.value||null;
       STAFF_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
 

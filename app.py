@@ -86,6 +86,7 @@ def init_db():
             ("accounts_email",    "TEXT"),
             ("bh_name",           "TEXT"),
             ("bh_email",          "TEXT"),
+            ("cheque_location",   "TEXT DEFAULT 'Customer'"),
             ("created_at",        "TIMESTAMPTZ DEFAULT NOW()"),
             ("updated_at",        "TIMESTAMPTZ"),
         ]
@@ -147,7 +148,7 @@ PROMPT = """You are scanning an Indian bank cheque. Extract these fields and ret
 Fields:
 1. bank_name       — The DRAWER's bank. In India this is the bank name/logo printed at the TOP-LEFT of the cheque. IMPORTANT: ignore any rubber stamps near the bottom — those belong to the collecting/receipt bank, NOT the drawer's bank.
 2. account_number  — Read ONLY the digits printed in the "A/c No." field. Read them exactly, digit-for-digit. Do NOT pad, do NOT add leading or trailing zeros, do NOT read the MICR band at the very bottom. If you cannot read it confidently, return null.
-3. cheque_number   — The cheque number, usually the FIRST group of digits in the MICR code line at the bottom (about 6 digits). Return null if not readable.
+3. cheque_number   — The cheque number: in the MICR code line at the very bottom of the cheque, take ONLY the LEFTMOST block of digits (usually 6 digits, printed between ⑈ symbols). IGNORE all blocks to the right of it (those are the MICR/city-bank-branch code, account code and transaction code). Return null if not readable.
 4. date            — The date exactly as it appears (e.g. "14/7/22"), raw.
 5. cheque_date_iso — The same date normalised to ISO format YYYY-MM-DD. Prefer the boxed DD MM YYYY date (usually top-right) as it is most reliable; otherwise use the handwritten date. Return null if no date can be determined.
 6. payee           — Name in the "Pay" field.
@@ -160,7 +161,7 @@ Rules:
 - Use null for any field you cannot read confidently. Never guess.
 
 Example:
-{"bank_name":"ICICI Bank","account_number":"015601500005","cheque_number":"500005","date":"08/06/2026","cheque_date_iso":"2026-06-08","payee":"RDC Concrete","amount_words":"Five Lakhs Only","amount_numbers":"5,00,000","issuer_name":"BRIG K S BHOON"}"""
+{"bank_name":"ICICI Bank","account_number":"015601500005","cheque_number":"000501","date":"08/06/2026","cheque_date_iso":"2026-06-08","payee":"RDC Concrete","amount_words":"Five Lakhs Only","amount_numbers":"5,00,000","issuer_name":"BRIG K S BHOON"}"""
 
 
 def build_source(img_bytes, media_type):
@@ -385,8 +386,8 @@ def accept():
                 (bank_name, account_number, cheque_number, cheque_date, cheque_date_iso,
                  deposit_due_date, payee, amount_words, amount_numbers, amount_value,
                  issuer_name, status, sales_name, sales_email, location, plant,
-                 accounts_email, bh_name, bh_email, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s,%s,%s,%s,%s,%s,%s, NOW())
+                 accounts_email, bh_name, bh_email, cheque_location, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s,%s,%s,%s,%s,%s,%s,%s, NOW())
             RETURNING id
             """,
             (
@@ -396,7 +397,7 @@ def accept():
                 amount_value, data.get("issuer_name"),
                 data.get("sales_name"), data.get("sales_email"), data.get("location"),
                 data.get("plant"), data.get("accounts_email"), data.get("bh_name"),
-                data.get("bh_email"),
+                data.get("bh_email"), data.get("cheque_location") or "Customer",
             ),
         )
         new_id = cur.fetchone()[0]
@@ -419,8 +420,33 @@ def accept():
 REPORT_COLS = [
     "id", "bank_name", "account_number", "cheque_number", "payee",
     "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
-    "status", "sales_name", "location", "plant", "bh_name",
+    "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
 ]
+
+CHEQUE_LOCATIONS = ["Customer", "RDC Accounts", "RDC Sales"]
+
+
+@app.route("/cheque/<int:cid>/location", methods=["POST"])
+def set_location(cid):
+    d = request.get_json(silent=True) or {}
+    loc = (d.get("cheque_location") or "").strip()
+    if loc not in CHEQUE_LOCATIONS:
+        return jsonify({"error": f"cheque_location must be one of {CHEQUE_LOCATIONS}"}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE cheques SET cheque_location=%s, updated_at=NOW() WHERE id=%s", (loc, cid))
+        if cur.rowcount == 0:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "cheque_location": loc})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 def _fetch_pending():
@@ -472,7 +498,8 @@ def report():
         ("Upcoming", "upcoming", upcoming),
         ("No due date set", "undated", undated),
     ]
-    return render_template("report.html", groups=groups, total=total, today=today.isoformat())
+    return render_template("report.html", groups=groups, total=total,
+                           today=today.isoformat(), locations=CHEQUE_LOCATIONS)
 
 
 @app.route("/cheque/<int:cid>/deposit", methods=["POST"])
@@ -564,7 +591,7 @@ def export():
                    cheque_date_iso, deposit_due_date, payee, amount_words,
                    amount_numbers, amount_value, issuer_name, status,
                    deposited_date, deposit_bank, deposit_reference,
-                   cleared_date, bounce_date, bounce_reason,
+                   cleared_date, bounce_date, bounce_reason, cheque_location,
                    sales_name, sales_email, location, plant, bh_name,
                    TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD-Mon-YYYY HH24:MI')
             FROM cheques
@@ -585,7 +612,7 @@ def export():
         "Cheque Date", "Deposit Due", "Pay To", "Amount (Words)",
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
-        "Cleared On", "Bounced On", "Bounce Reason",
+        "Cleared On", "Bounced On", "Bounce Reason", "Cheque Location",
         "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
     ]
 
@@ -611,7 +638,7 @@ def export():
                 c.fill = shade
 
     widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 11,
-              12, 16, 14, 11, 11, 20, 18, 22, 14, 12, 18, 20]
+              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"

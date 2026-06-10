@@ -49,6 +49,14 @@
 
     .empty { padding: 18px; text-align: center; color: #6b7280; font-size: 13px; background: #1a1d27; border: 1px dashed #2d3148; border-radius: 10px; }
 
+    .loc-select {
+      background: #0f1117; border: 1px solid #2d3148; border-radius: 6px;
+      color: #cbd5e1; padding: 5px 8px; font-size: 12px; cursor: pointer; outline: none;
+      transition: border-color .2s;
+    }
+    .loc-select:focus { border-color: #4f6ef7; }
+    .loc-select.saved { border-color: #059669; }
+
     /* Modal */
     .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
     .modal-bg.show { display: flex; }
@@ -88,7 +96,7 @@
         <thead>
           <tr>
             <th>Due Date</th><th>Bank</th><th>Cheque No</th><th>Pay To</th>
-            <th>Sales / Plant</th><th style="text-align:right;">Amount (₹)</th><th>Status</th><th>Action</th>
+            <th>Sales / Plant</th><th style="text-align:right;">Amount (₹)</th><th>Status</th><th>Cheque With</th><th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -101,6 +109,13 @@
             <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
             <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
             <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+            <td>
+              <select class="loc-select" onchange="setLocation({{ r.id }}, this)">
+                {% for loc in locations %}
+                <option value="{{ loc }}" {% if r.cheque_location == loc or (not r.cheque_location and loc == 'Customer') %}selected{% endif %}>{{ loc }}</option>
+                {% endfor %}
+              </select>
+            </td>
             <td>
               <div class="actions">
                 {% if r.status == 'BOUNCED' %}
@@ -171,6 +186,21 @@
       }catch{ showToast('⚠ Network error', true); }
       closeModal();
     });
+
+    async function setLocation(id, sel){
+      try{
+        const res = await fetch(`/cheque/${id}/location`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ cheque_location: sel.value })
+        });
+        const data = await res.json();
+        if(data.success){
+          sel.classList.add('saved');
+          setTimeout(()=>sel.classList.remove('saved'), 1500);
+          showToast('✓ Location updated');
+        } else showToast('⚠ '+(data.error||'Failed'), true);
+      }catch{ showToast('⚠ Network error', true); }
+    }
 
     function showToast(msg, err=false){
       const t=document.getElementById('toast');
