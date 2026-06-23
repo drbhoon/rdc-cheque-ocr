@@ -95,6 +95,16 @@ def init_db():
             ("cheque_location",   "TEXT DEFAULT 'Customer'"),
             ("created_at",        "TIMESTAMPTZ DEFAULT NOW()"),
             ("updated_at",        "TIMESTAMPTZ"),
+            # Phase 2 — multiple-bounce outcomes & case closure
+            ("legal_date",        "DATE"),
+            ("legal_reference",   "TEXT"),
+            ("rtgs_date",         "DATE"),
+            ("rtgs_reference",    "TEXT"),
+            ("rtgs_amount",       "NUMERIC"),
+            ("closed_date",       "DATE"),
+            ("closed_by",         "TEXT"),
+            ("close_reason",      "TEXT"),
+            ("last_reminder_at",  "TIMESTAMPTZ"),
         ]
         for name, ddl in cheque_cols:
             cur.execute(f"ALTER TABLE cheques ADD COLUMN IF NOT EXISTS {name} {ddl}")
@@ -133,6 +143,7 @@ def init_db():
                 created_at  TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        cur.execute("ALTER TABLE cheque_events ADD COLUMN IF NOT EXISTS remarks TEXT")
 
         # Users (login + roles)
         cur.execute("""
@@ -719,13 +730,16 @@ def _fetch_pending():
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT {', '.join(REPORT_COLS)}
+            SELECT {', '.join(REPORT_COLS)},
+                   (SELECT COUNT(*) FROM cheque_events e
+                    WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count
             FROM cheques
-            WHERE status IN ('PENDING','BOUNCED')
+            WHERE status IN ('PENDING','BOUNCED','LEGAL')
             ORDER BY deposit_due_date NULLS LAST, id
             """
         )
-        rows = [dict(zip(REPORT_COLS, r)) for r in cur.fetchall()]
+        cols = REPORT_COLS + ["bounce_count"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
@@ -774,8 +788,9 @@ def mark_deposit(cid):
     dep_date = parse_iso_date(d.get("date")) or date.today()
     bank = (d.get("bank") or "").strip() or None
     ref  = (d.get("reference") or "").strip() or None
+    rem  = (d.get("remarks") or "").strip() or None
     return _transition(cid, "DEPOSITED", action="DEPOSITED",
-                       action_date=dep_date, bank=bank, reference=ref,
+                       action_date=dep_date, bank=bank, reference=ref, remarks=rem,
                        extra_sql="deposited_date=%s, deposit_bank=%s, deposit_reference=%s",
                        extra_vals=(dep_date, bank, ref))
 
@@ -787,8 +802,9 @@ def mark_redeposit(cid):
     dep_date = parse_iso_date(d.get("date")) or date.today()
     bank = (d.get("bank") or "").strip() or None
     ref  = (d.get("reference") or "").strip() or None
+    rem  = (d.get("remarks") or "").strip() or None
     return _transition(cid, "DEPOSITED", action="REDEPOSITED",
-                       action_date=dep_date, bank=bank, reference=ref,
+                       action_date=dep_date, bank=bank, reference=ref, remarks=rem,
                        extra_sql="deposited_date=%s, deposit_bank=%s, deposit_reference=%s, "
                                  "bounce_date=NULL, bounce_reason=NULL",
                        extra_vals=(dep_date, bank, ref))
@@ -799,7 +815,8 @@ def mark_redeposit(cid):
 def mark_clear(cid):
     d = request.get_json(silent=True) or {}
     cdate = parse_iso_date(d.get("date")) or date.today()
-    return _transition(cid, "CLEARED", action="CLEARED", action_date=cdate,
+    rem   = (d.get("remarks") or "").strip() or None
+    return _transition(cid, "CLEARED", action="CLEARED", action_date=cdate, remarks=rem,
                        extra_sql="cleared_date=%s", extra_vals=(cdate,))
 
 
@@ -809,12 +826,145 @@ def mark_bounce(cid):
     d = request.get_json(silent=True) or {}
     bdate = parse_iso_date(d.get("date")) or date.today()
     reason = (d.get("reason") or "").strip() or None
-    return _transition(cid, "BOUNCED", action="BOUNCED", action_date=bdate, reason=reason,
+    rem   = (d.get("remarks") or "").strip() or None
+    return _transition(cid, "BOUNCED", action="BOUNCED", action_date=bdate, reason=reason, remarks=rem,
                        extra_sql="bounce_date=%s, bounce_reason=%s", extra_vals=(bdate, reason))
 
 
+@app.route("/cheque/<int:cid>/legal", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def mark_legal(cid):
+    d = request.get_json(silent=True) or {}
+    ldate = parse_iso_date(d.get("date")) or date.today()
+    ref   = (d.get("reference") or "").strip() or None   # case / FIR number
+    rem   = (d.get("remarks") or "").strip() or None
+    return _transition(cid, "LEGAL", action="LEGAL", action_date=ldate,
+                       reference=ref, remarks=rem,
+                       extra_sql="legal_date=%s, legal_reference=%s",
+                       extra_vals=(ldate, ref))
+
+
+@app.route("/cheque/<int:cid>/rtgs", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def mark_rtgs(cid):
+    """RTGS / direct payment received — money recovered another way; case closes."""
+    d = request.get_json(silent=True) or {}
+    rdate  = parse_iso_date(d.get("date")) or date.today()
+    ref    = (d.get("reference") or "").strip() or None
+    amount = parse_amount(d.get("amount"))
+    rem    = (d.get("remarks") or "").strip() or None
+    return _transition(cid, "RTGS_SETTLED", action="RTGS_SETTLED", action_date=rdate,
+                       reference=ref, remarks=rem,
+                       extra_sql="rtgs_date=%s, rtgs_reference=%s, rtgs_amount=%s",
+                       extra_vals=(rdate, ref, amount))
+
+
+@app.route("/cheque/<int:cid>/close", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def mark_close(cid):
+    """Explicitly close a case (e.g. a legal case concluded) — stops reminders."""
+    d = request.get_json(silent=True) or {}
+    cdate  = parse_iso_date(d.get("date")) or date.today()
+    reason = (d.get("reason") or "").strip() or None
+    rem    = (d.get("remarks") or "").strip() or None
+    who    = (current_user() or {}).get("email")
+    return _transition(cid, "CLOSED", action="CLOSED", action_date=cdate,
+                       reason=reason, remarks=rem,
+                       extra_sql="closed_date=%s, closed_by=%s, close_reason=%s",
+                       extra_vals=(cdate, who, reason))
+
+
+@app.route("/cheque/<int:cid>/override", methods=["POST"])
+@role_required("HO_ADMIN")
+def override_cheque(cid):
+    """HO-Admin-only edit of the frozen Cheque Date and/or Amount, with mandatory reason
+    and a full before/after audit trail."""
+    d = request.get_json(silent=True) or {}
+    reason = (d.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"error": "A reason is required to override locked fields."}), 400
+
+    new_date_raw = d.get("cheque_date")
+    new_iso      = parse_iso_date(d.get("cheque_date_iso"))
+    new_amt_txt  = d.get("amount_numbers")
+    has_amt      = new_amt_txt is not None and str(new_amt_txt).strip() != ""
+    has_date     = (new_date_raw is not None and str(new_date_raw).strip() != "") or new_iso is not None
+    if not has_amt and not has_date:
+        return jsonify({"error": "Nothing to change."}), 400
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT cheque_date, cheque_date_iso, amount_numbers, amount_value FROM cheques WHERE id=%s",
+            (cid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        old_date, old_iso, old_amt_txt, old_amt_val = row
+
+        sets, vals, changes = [], [], []
+        if has_date:
+            new_raw = (str(new_date_raw).strip() if new_date_raw else None) or (
+                new_iso.isoformat() if new_iso else None)
+            sets += ["cheque_date=%s", "cheque_date_iso=%s"]
+            vals += [new_raw, new_iso]
+            changes.append(("cheque_date", old_date, new_raw))
+            changes.append(("cheque_date_iso", old_iso, new_iso))
+        if has_amt:
+            new_val = parse_amount(new_amt_txt)
+            sets += ["amount_numbers=%s", "amount_value=%s"]
+            vals += [str(new_amt_txt).strip(), new_val]
+            changes.append(("amount_numbers", old_amt_txt, str(new_amt_txt).strip()))
+            changes.append(("amount_value", old_amt_val, new_val))
+
+        vals.append(cid)
+        cur.execute(f"UPDATE cheques SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s", vals)
+        # Event entry on the cheque's own timeline
+        cur.execute(
+            """INSERT INTO cheque_events (cheque_id, action, action_date, reason, remarks)
+               VALUES (%s,'OVERRIDE',%s,%s,%s)""",
+            (cid, date.today(), reason, (d.get("remarks") or "").strip() or None),
+        )
+        conn.commit()
+        cur.close()
+        # Audit log: one row per changed field
+        for field, old, new in changes:
+            log_change("CHEQUE", cid, field, old, new, reason)
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/cheque/<int:cid>/history")
+@login_required
+def cheque_history(cid):
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT action,
+                      TO_CHAR(action_date,'DD-Mon-YYYY'),
+                      bank, reference, reason, remarks,
+                      TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata','DD-Mon-YYYY HH24:MI')
+               FROM cheque_events WHERE cheque_id=%s ORDER BY id""",
+            (cid,),
+        )
+        cols = ["action", "action_date", "bank", "reference", "reason", "remarks", "logged_at"]
+        events = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    return jsonify({"events": events})
+
+
 def _transition(cid, new_status, action, action_date,
-                bank=None, reference=None, reason=None,
+                bank=None, reference=None, reason=None, remarks=None,
                 extra_sql="", extra_vals=()):
     conn = get_db()
     try:
@@ -830,9 +980,10 @@ def _transition(cid, new_status, action, action_date,
             cur.close()
             return jsonify({"error": "Cheque not found"}), 404
         cur.execute(
-            """INSERT INTO cheque_events (cheque_id, action, action_date, bank, reference, reason)
-               VALUES (%s,%s,%s,%s,%s,%s)""",
-            (cid, action, action_date, bank, reference, reason),
+            """INSERT INTO cheque_events
+                 (cheque_id, action, action_date, bank, reference, reason, remarks)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (cid, action, action_date, bank, reference, reason, remarks),
         )
         conn.commit()
         cur.close()

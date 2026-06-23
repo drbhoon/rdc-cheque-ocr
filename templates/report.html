@@ -36,6 +36,8 @@
     .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
     .badge.PENDING { background: rgba(79,110,247,0.15); color: #93b0ff; }
     .badge.BOUNCED { background: rgba(239,68,68,0.15); color: #fca5a5; }
+    .badge.LEGAL   { background: rgba(168,85,247,0.18); color: #d8b4fe; }
+    .bounce-n { font-size: 10px; font-weight: 700; color: #fca5a5; margin-left: 6px; }
 
     .actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .act {
@@ -46,6 +48,20 @@
     .act.deposit { color: #4ade80; }
     .act.bounce  { color: #fca5a5; }
     .act.redeposit { color: #93b0ff; }
+    .act.legal   { color: #d8b4fe; }
+    .act.rtgs    { color: #5eead4; }
+    .act.close   { color: #fbbf24; }
+    .act.override{ color: #f59e0b; }
+
+    /* History timeline */
+    .timeline { list-style: none; padding: 0; margin: 4px 0 0; }
+    .timeline li { position: relative; padding: 8px 0 8px 18px; border-left: 2px solid #2d3148; }
+    .timeline li::before { content: ''; position: absolute; left: -6px; top: 12px; width: 10px; height: 10px;
+      border-radius: 50%; background: #4f6ef7; }
+    .tl-action { font-weight: 700; font-size: 13px; }
+    .tl-meta { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+    .tl-remark { font-size: 12px; color: #cbd5e1; margin-top: 2px; font-style: italic; }
+    .req-note { font-size: 11px; color: #fbbf24; margin-top: 4px; }
 
     .empty { padding: 18px; text-align: center; color: #6b7280; font-size: 13px; background: #1a1d27; border: 1px dashed #2d3148; border-radius: 10px; }
 
@@ -108,7 +124,7 @@
             <td>{{ r.payee or '—' }}</td>
             <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
             <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
-            <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
+            <td><span class="badge {{ r.status }}">{{ r.status }}</span>{% if r.bounce_count and r.bounce_count > 1 %}<span class="bounce-n">×{{ r.bounce_count }}</span>{% endif %}</td>
             <td>
               <select class="loc-select" onchange="setLocation({{ r.id }}, this)">
                 {% for loc in locations %}
@@ -120,9 +136,18 @@
               <div class="actions">
                 {% if r.status == 'BOUNCED' %}
                   <button class="act redeposit" onclick="openModal('redeposit',{{ r.id }})">Re-deposit</button>
+                  <button class="act legal" onclick="openModal('legal',{{ r.id }})">Legal</button>
+                  <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+                {% elif r.status == 'LEGAL' %}
+                  <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+                  <button class="act close" onclick="openModal('close',{{ r.id }})">Close Case</button>
                 {% else %}
                   <button class="act deposit" onclick="openModal('deposit',{{ r.id }})">Deposited</button>
                   <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+                {% endif %}
+                <button class="act" onclick="showHistory({{ r.id }})">History</button>
+                {% if user and user.role == 'HO_ADMIN' %}
+                  <button class="act override" onclick="openOverride({{ r.id }}, {{ (r.amount_value or '')|tojson }}, {{ (r.cheque_date_iso.isoformat() if r.cheque_date_iso else '')|tojson }})">✎ Edit</button>
                 {% endif %}
               </div>
             </td>
@@ -156,30 +181,92 @@
       if(r.status===401){ location.href='/login'; } return r; }; })();
     const today = "{{ today }}";
     let current = { action:null, id:null };
+    const confirmBtn = document.getElementById('modalConfirm');
+
+    const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
 
     function openModal(action, id){
       current = { action, id };
-      const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced' };
+      confirmBtn.style.display = '';
+      const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced',
+                       legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case' };
       document.getElementById('modalTitle').textContent = titles[action];
       const f = document.getElementById('modalFields');
       if(action === 'bounce'){
         f.innerHTML = `<label>Bounce Date</label><input id="m-date" type="date" value="${today}" />
-                       <label>Reason</label><input id="m-reason" type="text" placeholder="e.g. Insufficient funds" />`;
+                       <label>Reason</label><input id="m-reason" type="text" placeholder="e.g. Insufficient funds" />` + REMARKS;
+      } else if(action === 'legal'){
+        f.innerHTML = `<label>Filing Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Case / FIR Number</label><input id="m-ref" type="text" placeholder="e.g. 138 NI Act case no." />` + REMARKS
+                       + `<div class="req-note">Reminders continue for legal cases until you Close the case.</div>`;
+      } else if(action === 'rtgs'){
+        f.innerHTML = `<label>Payment Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>UTR / Reference</label><input id="m-ref" type="text" placeholder="RTGS/NEFT reference" />
+                       <label>Amount Received (₹)</label><input id="m-amount" type="text" placeholder="e.g. 5,00,000" />` + REMARKS;
+      } else if(action === 'close'){
+        f.innerHTML = `<label>Close Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Closure Reason</label><input id="m-reason" type="text" placeholder="e.g. settled out of court" />` + REMARKS;
       } else {
         f.innerHTML = `<label>Deposit Date</label><input id="m-date" type="date" value="${today}" />
                        <label>Deposited Into (Bank / A/c)</label><input id="m-bank" type="text" placeholder="e.g. HDFC Current A/c" />
-                       <label>Reference / Slip No.</label><input id="m-ref" type="text" placeholder="optional" />`;
+                       <label>Reference / Slip No.</label><input id="m-ref" type="text" placeholder="optional" />` + REMARKS;
       }
       document.getElementById('modalBg').classList.add('show');
     }
-    function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
 
-    document.getElementById('modalConfirm').addEventListener('click', async ()=>{
+    function openOverride(id, amountVal, isoDate){
+      current = { action:'override', id };
+      confirmBtn.style.display = '';
+      document.getElementById('modalTitle').textContent = '✎ Edit Locked Fields (audited)';
+      document.getElementById('modalFields').innerHTML =
+        `<label>Cheque Date</label><input id="o-date" type="date" value="${isoDate||''}" />
+         <label>Amount (₹)</label><input id="o-amount" type="text" value="${amountVal||''}" />
+         <label>Reason (required)</label><input id="o-reason" type="text" placeholder="why this correction is needed" />
+         <div class="req-note">This change is recorded in the edit log against your name.</div>`;
+      document.getElementById('modalBg').classList.add('show');
+    }
+
+    async function showHistory(id){
+      current = { action:'history', id };
+      confirmBtn.style.display = 'none';
+      document.getElementById('modalTitle').textContent = 'Cheque History';
+      const f = document.getElementById('modalFields');
+      f.innerHTML = '<div class="muted">Loading…</div>';
+      document.getElementById('modalBg').classList.add('show');
+      try{
+        const res = await fetch(`/cheque/${id}/history`);
+        const data = await res.json();
+        if(!data.events || !data.events.length){ f.innerHTML = '<div class="muted">No events yet.</div>'; return; }
+        f.innerHTML = '<ul class="timeline">' + data.events.map(e=>{
+          const bits = [e.action_date, e.bank, e.reference, e.reason].filter(Boolean).join(' · ');
+          return `<li><div class="tl-action">${esc(e.action)}</div>
+                   <div class="tl-meta">${esc(bits)}</div>
+                   ${e.remarks?`<div class="tl-remark">“${esc(e.remarks)}”</div>`:''}</li>`;
+        }).join('') + '</ul>';
+      }catch{ f.innerHTML = '<div class="muted">Could not load history.</div>'; }
+    }
+
+    function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    confirmBtn.addEventListener('click', async ()=>{
       const { action, id } = current;
-      const body = { date: document.getElementById('m-date')?.value };
-      if(action === 'bounce'){ body.reason = document.getElementById('m-reason')?.value; }
-      else { body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
-      const url = `/cheque/${id}/${action}`;
+      let url, body;
+      if(action === 'override'){
+        const reason = document.getElementById('o-reason')?.value.trim();
+        if(!reason){ showToast('⚠ A reason is required', true); return; }
+        url = `/cheque/${id}/override`;
+        body = { cheque_date_iso: document.getElementById('o-date')?.value,
+                 amount_numbers:  document.getElementById('o-amount')?.value, reason };
+      } else {
+        url = `/cheque/${id}/${action}`;
+        body = { date: document.getElementById('m-date')?.value,
+                 remarks: document.getElementById('m-remarks')?.value };
+        if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
+        else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
+        else if(action === 'rtgs'){ body.reference = document.getElementById('m-ref')?.value; body.amount = document.getElementById('m-amount')?.value; }
+        else { body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
+      }
       try{
         const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
         const data = await res.json();
