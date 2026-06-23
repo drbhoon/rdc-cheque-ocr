@@ -33,7 +33,9 @@
   </style>
 </head>
 <body>
-  <div class="topbar"><a href="/">＋ Scan</a><a href="/report">📋 Report</a></div>
+  <div class="topbar"><a href="/">＋ Scan</a><a href="/report">📋 Report</a>
+    {% if user and user.role == 'HO_ADMIN' %}<a href="/users">👤 Users</a>{% endif %}
+    {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
   <div class="card">
     <h1>👥 Staff Master</h1>
     <div class="sub">Upload the staff template. Selecting a sales person on the scan screen will auto-fill their details.</div>
@@ -61,6 +63,8 @@
   </div>
 
   <script>
+    (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
+      if(r.status===401){ location.href='/login'; } return r; }; })();
     const file=document.getElementById('file'), upBtn=document.getElementById('upBtn'),
       fname=document.getElementById('fname'), msg=document.getElementById('msg');
     let selected=null;

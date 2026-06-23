@@ -3,8 +3,11 @@ import re
 import json
 import base64
 import io
+from functools import wraps
 from datetime import date, datetime, timedelta
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import (Flask, request, jsonify, render_template, send_file,
+                   session, redirect, url_for)
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 import anthropic
 
@@ -12,6 +15,9 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+app.secret_key = os.environ.get("SECRET_KEY", "dev-only-insecure-change-me")
+
+ROLES = ("HO_ADMIN", "ACCOUNTS", "VIEWER")
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "pdf"}
 STAFF_EXTENSIONS = {"xlsx", "xls"}
@@ -128,6 +134,50 @@ def init_db():
             )
         """)
 
+        # Users (login + roles)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            SERIAL PRIMARY KEY,
+                email         TEXT UNIQUE NOT NULL,
+                name          TEXT,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL DEFAULT 'VIEWER',
+                active        BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+        # Change / edit log (freeze overrides, staff-master edits, user changes)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS change_log (
+                id            SERIAL PRIMARY KEY,
+                entity_type   TEXT,
+                entity_id     TEXT,
+                field_changed TEXT,
+                old_value     TEXT,
+                new_value     TEXT,
+                reason        TEXT,
+                changed_by    TEXT,
+                changed_at    TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+        # Seed the first HO Admin from env, only if no users exist yet
+        cur.execute("SELECT COUNT(*) FROM users")
+        if cur.fetchone()[0] == 0:
+            seed_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+            seed_pw    = os.environ.get("ADMIN_PASSWORD") or ""
+            if seed_email and seed_pw:
+                cur.execute(
+                    "INSERT INTO users (email, name, password_hash, role) "
+                    "VALUES (%s,%s,%s,'HO_ADMIN')",
+                    (seed_email, "HO Admin", generate_password_hash(seed_pw)),
+                )
+                print(f"[DB] Seeded first HO Admin: {seed_email}")
+            else:
+                print("[DB] No users yet and ADMIN_EMAIL/ADMIN_PASSWORD not set — "
+                      "set them to seed the first admin.")
+
         conn.commit()
         cur.close()
     finally:
@@ -219,14 +269,223 @@ def file_ext(filename):
     return filename.rsplit(".", 1)[1].lower() if "." in filename else ""
 
 
+# ── Auth: helpers, decorators, audit ─────────────────────────────────────────
+
+def current_user():
+    """The logged-in user dict {email, name, role} or None."""
+    return session.get("user")
+
+
+@app.context_processor
+def inject_user():
+    """Make `user` available in every template."""
+    return {"user": current_user()}
+
+
+def _wants_json():
+    """True for fetch/XHR/API calls; False for top-level page loads."""
+    if request.method != "GET":
+        return True
+    accept = request.headers.get("Accept", "")
+    return "application/json" in accept and "text/html" not in accept
+
+
+def _deny(msg, code):
+    if _wants_json():
+        return jsonify({"error": msg}), code
+    if code == 401:
+        return redirect(url_for("login", next=request.path))
+    return render_template("login.html", error="You are not authorised for that page."), code
+
+
+def role_required(*roles):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            u = current_user()
+            if not u:
+                return _deny("auth_required", 401)
+            if roles and u["role"] not in roles:
+                return _deny("forbidden", 403)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def login_required(f):
+    """Any authenticated user (any role)."""
+    return role_required(*ROLES)(f)
+
+
+def log_change(entity_type, entity_id, field, old, new, reason=None):
+    """Write one row to change_log, stamped with the current user. Best-effort."""
+    u = current_user() or {}
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO change_log
+                 (entity_type, entity_id, field_changed, old_value, new_value, reason, changed_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (entity_type, str(entity_id), field,
+             None if old is None else str(old),
+             None if new is None else str(new),
+             reason, u.get("email")),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+
+# ── Routes: auth ──────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        if current_user():
+            return redirect(url_for("index"))
+        return render_template("login.html")
+
+    email = (request.form.get("email") or "").strip().lower()
+    password = request.form.get("password") or ""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email, name, password_hash, role, active FROM users WHERE email=%s",
+            (email,),
+        )
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+
+    if not row or not row[4] or not check_password_hash(row[2], password):
+        return render_template("login.html", error="Invalid email or password."), 401
+
+    session["user"] = {"email": row[0], "name": row[1], "role": row[3]}
+    nxt = request.args.get("next") or url_for("index")
+    return redirect(nxt)
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ── Routes: user management (HO Admin only) ───────────────────────────────────
+
+USER_COLS = ["id", "email", "name", "role", "active", "created_at"]
+
+
+@app.route("/users", methods=["GET"])
+@role_required("HO_ADMIN")
+def users_page():
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {', '.join(USER_COLS)} FROM users ORDER BY role, email")
+        rows = [dict(zip(USER_COLS, r)) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    return render_template("users.html", users=rows, roles=ROLES)
+
+
+@app.route("/users", methods=["POST"])
+@role_required("HO_ADMIN")
+def users_create():
+    d = request.get_json(silent=True) or {}
+    email = (d.get("email") or "").strip().lower()
+    name  = (d.get("name") or "").strip() or None
+    role  = (d.get("role") or "").strip().upper()
+    pw    = d.get("password") or ""
+    if not email or "@" not in email:
+        return jsonify({"error": "A valid email is required"}), 400
+    if role not in ROLES:
+        return jsonify({"error": f"role must be one of {ROLES}"}), 400
+    if len(pw) < 6:
+        return jsonify({"error": "Password must be at least 6 characters"}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (email, name, password_hash, role) VALUES (%s,%s,%s,%s) RETURNING id",
+            (email, name, generate_password_hash(pw), role),
+        )
+        new_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        log_change("USER", new_id, "create", None, f"{email} ({role})")
+        return jsonify({"success": True, "id": new_id})
+    except Exception as e:
+        conn.rollback()
+        if "users_email_key" in str(e):
+            return jsonify({"error": "A user with that email already exists"}), 409
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/users/<int:uid>", methods=["POST"])
+@role_required("HO_ADMIN")
+def users_update(uid):
+    """Toggle active, change role, or reset password."""
+    d = request.get_json(silent=True) or {}
+    me = current_user()
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT email, role, active FROM users WHERE id=%s", (uid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "User not found"}), 404
+        email, old_role, old_active = row
+
+        if "active" in d:
+            new_active = bool(d["active"])
+            if email == me["email"] and not new_active:
+                cur.close()
+                return jsonify({"error": "You cannot deactivate your own account"}), 400
+            cur.execute("UPDATE users SET active=%s WHERE id=%s", (new_active, uid))
+            log_change("USER", uid, "active", old_active, new_active)
+        if "role" in d:
+            new_role = str(d["role"]).upper()
+            if new_role not in ROLES:
+                cur.close()
+                return jsonify({"error": f"role must be one of {ROLES}"}), 400
+            cur.execute("UPDATE users SET role=%s WHERE id=%s", (new_role, uid))
+            log_change("USER", uid, "role", old_role, new_role)
+        if d.get("password"):
+            if len(d["password"]) < 6:
+                cur.close()
+                return jsonify({"error": "Password must be at least 6 characters"}), 400
+            cur.execute("UPDATE users SET password_hash=%s WHERE id=%s",
+                        (generate_password_hash(d["password"]), uid))
+            log_change("USER", uid, "password", "***", "***")
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
 # ── Routes: scan UI ──────────────────────────────────────────────────────────
 
 @app.route("/")
+@role_required("HO_ADMIN", "ACCOUNTS")
 def index():
     return render_template("index.html")
 
 
 @app.route("/predict", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def predict():
     if "image" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -262,6 +521,7 @@ STAFF_FIELDS = ["sales_name", "sales_email", "location", "plant",
 
 
 @app.route("/staff")
+@login_required
 def staff_list():
     conn = get_db()
     try:
@@ -275,6 +535,7 @@ def staff_list():
 
 
 @app.route("/staff/upload", methods=["GET", "POST"])
+@role_required("HO_ADMIN")
 def staff_upload():
     if request.method == "GET":
         conn = get_db()
@@ -350,6 +611,7 @@ def staff_upload():
 # ── Routes: save cheque ──────────────────────────────────────────────────────
 
 @app.route("/accept", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def accept():
     data = request.get_json(silent=True)
     if not data:
@@ -428,6 +690,7 @@ CHEQUE_LOCATIONS = ["Customer", "RDC Accounts", "RDC Sales"]
 
 
 @app.route("/cheque/<int:cid>/location", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def set_location(cid):
     d = request.get_json(silent=True) or {}
     loc = (d.get("cheque_location") or "").strip()
@@ -470,6 +733,7 @@ def _fetch_pending():
 
 
 @app.route("/report")
+@login_required
 def report():
     rows = _fetch_pending()
     today = date.today()
@@ -504,6 +768,7 @@ def report():
 
 
 @app.route("/cheque/<int:cid>/deposit", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def mark_deposit(cid):
     d = request.get_json(silent=True) or {}
     dep_date = parse_iso_date(d.get("date")) or date.today()
@@ -516,6 +781,7 @@ def mark_deposit(cid):
 
 
 @app.route("/cheque/<int:cid>/redeposit", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def mark_redeposit(cid):
     d = request.get_json(silent=True) or {}
     dep_date = parse_iso_date(d.get("date")) or date.today()
@@ -529,6 +795,7 @@ def mark_redeposit(cid):
 
 
 @app.route("/cheque/<int:cid>/clear", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def mark_clear(cid):
     d = request.get_json(silent=True) or {}
     cdate = parse_iso_date(d.get("date")) or date.today()
@@ -537,6 +804,7 @@ def mark_clear(cid):
 
 
 @app.route("/cheque/<int:cid>/bounce", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
 def mark_bounce(cid):
     d = request.get_json(silent=True) or {}
     bdate = parse_iso_date(d.get("date")) or date.today()
@@ -579,6 +847,7 @@ def _transition(cid, new_status, action, action_date,
 # ── Routes: Excel export ─────────────────────────────────────────────────────
 
 @app.route("/export")
+@login_required
 def export():
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side

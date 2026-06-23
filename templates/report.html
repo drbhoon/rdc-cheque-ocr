@@ -152,6 +152,8 @@
   <div class="toast" id="toast"></div>
 
   <script>
+    (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
+      if(r.status===401){ location.href='/login'; } return r; }; })();
     const today = "{{ today }}";
     let current = { action:null, id:null };
 

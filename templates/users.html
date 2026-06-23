@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Users — Cheque Scanner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0;
+      min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px; }
+    .topbar { width: 100%; max-width: 880px; display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 16px; font-size: 13px; }
+    .topbar .links a { color: #7c9bff; text-decoration: none; margin-left: 16px; }
+    .topbar .who { color: #6b7280; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 16px; padding: 28px;
+      width: 100%; max-width: 880px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+    h1 { font-size: 19px; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #6b7280; margin-bottom: 22px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid #2d3148; }
+    th { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #6b7280; }
+    .role-badge { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+      background: rgba(79,110,247,0.15); color: #a5b4fc; }
+    .pill { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; }
+    .pill.on  { background: rgba(34,197,94,0.12);  color: #4ade80; }
+    .pill.off { background: rgba(239,68,68,0.1);   color: #f87171; }
+    select, input { background: #0f1117; border: 1px solid #2d3148; border-radius: 6px;
+      color: #e2e8f0; padding: 6px 8px; font-size: 13px; outline: none; }
+    select:focus, input:focus { border-color: #4f6ef7; }
+    .mini { background: none; border: 1px solid #2d3148; border-radius: 6px; color: #cbd5e1;
+      padding: 5px 10px; font-size: 12px; cursor: pointer; }
+    .mini:hover { border-color: #4f6ef7; }
+    .add-row { margin-top: 22px; padding-top: 20px; border-top: 1px solid #2d3148;
+      display: grid; grid-template-columns: 1.4fr 1.4fr 1fr 1fr auto; gap: 10px; align-items: end; }
+    .add-row label { font-size: 11px; color: #6b7280; display: block; margin-bottom: 5px; }
+    .btn { background: linear-gradient(135deg,#4f6ef7,#7c3aed); border: none; border-radius: 8px;
+      color: #fff; padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #059669;
+      color: #fff; padding: 11px 24px; border-radius: 10px; font-size: 14px; font-weight: 600;
+      opacity: 0; pointer-events: none; transition: opacity .3s; }
+    .toast.show { opacity: 1; } .toast.err { background: #dc2626; }
+    @media (max-width: 640px) { .add-row { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="who">Signed in as <b>{{ user.email }}</b> ({{ user.role }})</div>
+    <div class="links">
+      <a href="/">＋ Scan</a><a href="/report">📋 Report</a>
+      <a href="/staff/upload">👥 Staff</a><a href="/logout">Logout</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h1>👤 Users &amp; Access</h1>
+    <div class="sub">HO Admins manage logins and roles. Every change is recorded in the edit log.</div>
+
+    <table>
+      <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr data-id="{{ u.id }}">
+          <td>{{ u.email }}</td>
+          <td>{{ u.name or '—' }}</td>
+          <td>
+            <select onchange="updateUser({{ u.id }}, {role: this.value})">
+              {% for r in roles %}
+              <option value="{{ r }}" {% if u.role == r %}selected{% endif %}>{{ r }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><span class="pill {{ 'on' if u.active else 'off' }}">{{ 'Active' if u.active else 'Disabled' }}</span></td>
+          <td>
+            <button class="mini" onclick="updateUser({{ u.id }}, {active: {{ 'false' if u.active else 'true' }} })">
+              {{ 'Disable' if u.active else 'Enable' }}
+            </button>
+            <button class="mini" onclick="resetPw({{ u.id }})">Reset password</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="add-row">
+      <div><label>Email</label><input type="email" id="n-email" placeholder="person@rdc.in" /></div>
+      <div><label>Name</label><input type="text" id="n-name" placeholder="Full name" /></div>
+      <div><label>Role</label>
+        <select id="n-role">{% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select>
+      </div>
+      <div><label>Password</label><input type="text" id="n-pw" placeholder="min 6 chars" /></div>
+      <button class="btn" onclick="addUser()">Add User</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function toast(msg, err=false){ const t=document.getElementById('toast');
+      t.textContent=msg; t.classList.toggle('err',err); t.classList.add('show');
+      setTimeout(()=>t.classList.remove('show'),2500); }
+
+    async function post(url, body){
+      const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)});
+      return { ok: res.ok, data: await res.json().catch(()=>({})) };
+    }
+
+    async function addUser(){
+      const email=document.getElementById('n-email').value.trim();
+      const name =document.getElementById('n-name').value.trim();
+      const role =document.getElementById('n-role').value;
+      const pw   =document.getElementById('n-pw').value;
+      const {ok,data}=await post('/users',{email,name,role,password:pw});
+      if(ok&&data.success){ toast('✓ User added'); setTimeout(()=>location.reload(),800); }
+      else toast('⚠ '+(data.error||'Failed'), true);
+    }
+
+    async function updateUser(id, patch){
+      const {ok,data}=await post('/users/'+id, patch);
+      if(ok&&data.success){ toast('✓ Updated'); setTimeout(()=>location.reload(),700); }
+      else toast('⚠ '+(data.error||'Failed'), true);
+    }
+
+    async function resetPw(id){
+      const pw=prompt('New password (min 6 characters):');
+      if(!pw) return;
+      const {ok,data}=await post('/users/'+id,{password:pw});
+      if(ok&&data.success) toast('✓ Password reset');
+      else toast('⚠ '+(data.error||'Failed'), true);
+    }
+  </script>
+</body>
+</html>
