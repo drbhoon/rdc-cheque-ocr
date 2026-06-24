@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Cheque Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; padding: 20px 16px 60px; }
+    .wrap { max-width: 1320px; margin: 0 auto; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+    .topbar h1 { font-size: 22px; font-weight: 700; }
+    .topbar .links a { color: #7c9bff; text-decoration: none; margin-left: 16px; font-size: 13px; }
+    .topbar .links a:hover { text-decoration: underline; }
+
+    /* Summary cards */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 22px; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; padding: 12px 14px; cursor: pointer; transition: border-color .15s, transform .1s; text-decoration: none; color: inherit; display: block; }
+    .card:hover { border-color: #4f6ef7; }
+    .card.active { border-color: #4f6ef7; background: #1e2233; }
+    .card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #94a3b8; display: flex; align-items: center; gap: 6px; }
+    .card .num { font-size: 22px; font-weight: 700; margin-top: 4px; }
+    .card .amt { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .dotc { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .c-all .dotc{background:#94a3b8}.c-overdue .dotc{background:#ef4444}.c-pending .dotc{background:#4f6ef7}
+    .c-deposited .dotc{background:#22d3ee}.c-bounced .dotc{background:#f87171}.c-redeposited .dotc{background:#93b0ff}
+    .c-cleared .dotc{background:#4ade80}.c-legal .dotc{background:#a855f7}.c-rtgs .dotc{background:#5eead4}.c-closed .dotc{background:#6b7280}
+
+    /* Filter bar */
+    form.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #161922; border: 1px solid #2d3148; border-radius: 10px; padding: 14px; margin-bottom: 20px; }
+    .filters label { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+    .filters input, .filters select { background: #0f1117; border: 1px solid #2d3148; border-radius: 7px; color: #e2e8f0; padding: 8px 10px; font-size: 13px; outline: none; }
+    .filters input:focus, .filters select:focus { border-color: #4f6ef7; }
+    .filters .grow { flex: 1; min-width: 180px; }
+    .filters .apply { background: linear-gradient(135deg,#4f6ef7,#7c3aed); border: none; color: #fff; font-weight: 600; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    .filters .clear { background: #2d3148; color: #cbd5e1; border: none; padding: 9px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; text-decoration: none; }
+
+    table { width: 100%; border-collapse: collapse; background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 9px 11px; font-size: 12.5px; border-bottom: 1px solid #2d3148; vertical-align: middle; }
+    th { background: #161922; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 10.5px; letter-spacing: .5px; }
+    tr:last-child td { border-bottom: none; }
+    td.amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .muted { color: #6b7280; font-size: 11px; }
+    .stale-tag { font-size: 9px; font-weight: 700; color: #fca5a5; background: rgba(239,68,68,0.12); padding: 1px 5px; border-radius: 5px; margin-left: 5px; }
+    .badge { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+    .badge.PENDING{background:rgba(79,110,247,.15);color:#93b0ff}.badge.DEPOSITED{background:rgba(34,211,238,.15);color:#67e8f9}
+    .badge.BOUNCED{background:rgba(239,68,68,.15);color:#fca5a5}.badge.CLEARED{background:rgba(34,197,94,.15);color:#86efac}
+    .badge.LEGAL{background:rgba(168,85,247,.18);color:#d8b4fe}.badge.RTGS_SETTLED{background:rgba(20,184,166,.18);color:#5eead4}
+    .badge.CLOSED{background:rgba(107,114,128,.2);color:#cbd5e1}
+    .bounce-n { font-size: 9px; font-weight: 700; color: #fca5a5; margin-left: 5px; }
+
+    .actions { display: flex; gap: 5px; flex-wrap: wrap; }
+    .act { border: 1px solid #2d3148; background: #0f1117; color: #cbd5e1; border-radius: 6px; padding: 4px 9px; font-size: 11.5px; cursor: pointer; transition: border-color .2s, color .2s; }
+    .act:hover { border-color: #4f6ef7; color: #fff; }
+    .act.deposit{color:#4ade80}.act.bounce{color:#fca5a5}.act.redeposit{color:#93b0ff}.act.clear{color:#86efac}
+    .act.legal{color:#d8b4fe}.act.rtgs{color:#5eead4}.act.close{color:#fbbf24}.act.override{color:#f59e0b}
+
+    .empty { padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
+    .tablewrap { overflow-x: auto; }
+    .totbar { margin: 12px 2px; font-size: 13px; color: #94a3b8; }
+
+    /* Modal + timeline (shared with report) */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+    .modal-bg.show { display: flex; }
+    .modal { background: #1a1d27; border: 1px solid #2d3148; border-radius: 14px; padding: 24px; width: 100%; max-width: 400px; max-height: 86vh; overflow:auto; }
+    .modal h3 { font-size: 16px; margin-bottom: 14px; }
+    .modal label { display: block; font-size: 12px; color: #94a3b8; margin: 12px 0 5px; }
+    .modal input { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+    .modal input:focus { border-color: #4f6ef7; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+    .modal-actions button { flex: 1; padding: 10px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn-cancel { background: #2d3148; color: #cbd5e1; } .btn-confirm { background: linear-gradient(135deg,#059669,#047857); color: #fff; }
+    .req-note { font-size: 11px; color: #fbbf24; margin-top: 4px; }
+    .timeline { list-style: none; padding: 0; margin: 4px 0 0; }
+    .timeline li { position: relative; padding: 8px 0 8px 18px; border-left: 2px solid #2d3148; }
+    .timeline li::before { content:''; position:absolute; left:-6px; top:12px; width:10px; height:10px; border-radius:50%; background:#4f6ef7; }
+    .tl-action { font-weight: 700; font-size: 13px; } .tl-meta { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+    .tl-remark { font-size: 12px; color: #cbd5e1; margin-top: 2px; font-style: italic; }
+    .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%); background: #059669; color: #fff; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 200; }
+    .toast.show { opacity: 1; } .toast.error-toast { background: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <h1>📊 Cheque Dashboard</h1>
+      <div class="links">
+        {% if user and user.role in ['HO_ADMIN','ACCOUNTS'] %}<a href="/">＋ Scan</a>{% endif %}
+        <a href="/report">📋 Action List</a>
+        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/users">👤 Users</a>{% endif %}
+        <a href="/export" target="_blank">📥 Excel</a>
+        <a href="/logout">Logout ({{ user.role }})</a>
+      </div>
+    </div>
+
+    {% set order = [('all','All'),('overdue','Overdue'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('closed','Closed')] %}
+    {% set keymap = {'all':None,'overdue':'OVERDUE','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','closed':'CLOSED'} %}
+    <div class="cards">
+      {% for token, label in order %}
+      {% set k = keymap[token] %}
+      {% if token == 'all' %}{% set cnt = summary.values()|sum(attribute='count') if summary else 0 %}{% set amt = summary.values()|sum(attribute='amount') if summary else 0 %}
+      {% elif token == 'redeposited' %}{% set cnt = '' %}{% set amt = '' %}
+      {% else %}{% set cnt = summary.get(k, {}).get('count', 0) %}{% set amt = summary.get(k, {}).get('amount', 0) %}{% endif %}
+      <a class="card c-{{ token }} {{ 'active' if active == token else '' }}" onclick="setStatus('{{ token }}')">
+        <div class="lbl"><span class="dotc"></span>{{ label }}</div>
+        <div class="num">{{ cnt }}</div>
+        {% if amt != '' and amt %}<div class="amt">₹ {{ '{:,.0f}'.format(amt) }}</div>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+
+    <form class="filters" id="filterForm" method="get" action="/dashboard">
+      <input type="hidden" name="status" id="f-status" value="{{ active }}" />
+      <div class="grow">
+        <label>Search (payee / account / cheque no / issuer)</label>
+        <input type="text" name="q" value="{{ q }}" placeholder="type to search…" style="width:100%" />
+      </div>
+      <div><label>Sales</label>
+        <select name="sales"><option value="">All</option>
+          {% for s in sales_opts %}<option value="{{ s }}" {{ 'selected' if sel_sales==s else '' }}>{{ s }}</option>{% endfor %}
+        </select></div>
+      <div><label>Location</label>
+        <select name="location"><option value="">All</option>
+          {% for s in loc_opts %}<option value="{{ s }}" {{ 'selected' if sel_loc==s else '' }}>{{ s }}</option>{% endfor %}
+        </select></div>
+      <div><label>Plant</label>
+        <select name="plant"><option value="">All</option>
+          {% for s in plant_opts %}<option value="{{ s }}" {{ 'selected' if sel_plant==s else '' }}>{{ s }}</option>{% endfor %}
+        </select></div>
+      <div><label>From</label><input type="date" name="from" value="{{ f_from }}" /></div>
+      <div><label>To</label><input type="date" name="to" value="{{ f_to }}" /></div>
+      <button class="apply" type="submit">Apply</button>
+      <a class="clear" href="/dashboard">Clear</a>
+    </form>
+
+    <div class="totbar">{{ rows|length }} cheque(s) shown · Total ₹ {{ '{:,.0f}'.format(total_amount) }}</div>
+
+    <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Cheque Date</th><th>Due</th><th>Bank / Account</th><th>Cheque No</th><th>Pay To</th>
+        <th>Sales / Plant</th><th style="text-align:right;">Amount (₹)</th><th>With</th><th>Status</th><th>Action</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.cheque_date_iso or '—' }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
+          <td>{{ r.deposit_due_date or '—' }}</td>
+          <td>{{ r.bank_name or '—' }}<div class="muted">{{ r.account_number or '' }}</div></td>
+          <td>{{ r.cheque_number or '—' }}</td>
+          <td>{{ r.payee or '—' }}</td>
+          <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
+          <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
+          <td>{{ r.cheque_location or '—' }}</td>
+          <td><span class="badge {{ r.status }}">{{ r.status.replace('_',' ') }}</span>{% if r.bounce_count and r.bounce_count > 1 %}<span class="bounce-n">×{{ r.bounce_count }}</span>{% endif %}</td>
+          <td>
+            <div class="actions">
+              {% if r.status == 'PENDING' %}
+                <button class="act deposit" onclick="openModal('deposit',{{ r.id }})">Deposited</button>
+                <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+              {% elif r.status == 'DEPOSITED' %}
+                <button class="act clear" onclick="openModal('clear',{{ r.id }})">Cleared</button>
+                <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+              {% elif r.status == 'BOUNCED' %}
+                <button class="act redeposit" onclick="openModal('redeposit',{{ r.id }})">Re-deposit</button>
+                <button class="act legal" onclick="openModal('legal',{{ r.id }})">Legal</button>
+                <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+              {% elif r.status == 'LEGAL' %}
+                <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+                <button class="act close" onclick="openModal('close',{{ r.id }})">Close</button>
+              {% endif %}
+              <button class="act" onclick="showHistory({{ r.id }})">History</button>
+              {% if user and user.role == 'HO_ADMIN' %}
+                <button class="act override" data-id="{{ r.id }}"
+                  data-amount="{{ r.amount_value if r.amount_value is not none else '' }}"
+                  data-date="{{ r.cheque_date_iso.isoformat() if r.cheque_date_iso else '' }}"
+                  onclick="openOverride(this.dataset.id, this.dataset.amount, this.dataset.date)">✎ Edit</button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not rows %}<div class="empty">No cheques match these filters.</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="modal-bg" id="modalBg">
+    <div class="modal">
+      <h3 id="modalTitle">Action</h3>
+      <div id="modalFields"></div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="btn-confirm" id="modalConfirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
+      if(r.status===401){ location.href='/login'; } return r; }; })();
+    const today = "{{ today }}";
+    let current = { action:null, id:null };
+    const confirmBtn = document.getElementById('modalConfirm');
+    const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
+
+    function setStatus(token){ document.getElementById('f-status').value = token; document.getElementById('filterForm').submit(); }
+
+    function openModal(action, id){
+      current = { action, id }; confirmBtn.style.display='';
+      const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced',
+                       clear:'Mark Cleared', legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case' };
+      document.getElementById('modalTitle').textContent = titles[action];
+      const f = document.getElementById('modalFields');
+      if(action === 'bounce'){
+        f.innerHTML = `<label>Bounce Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Reason</label><input id="m-reason" type="text" placeholder="e.g. Insufficient funds" />` + REMARKS;
+      } else if(action === 'clear'){
+        f.innerHTML = `<label>Cleared Date</label><input id="m-date" type="date" value="${today}" />` + REMARKS;
+      } else if(action === 'legal'){
+        f.innerHTML = `<label>Filing Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Case / FIR Number</label><input id="m-ref" type="text" placeholder="e.g. 138 NI Act case no." />` + REMARKS
+                       + `<div class="req-note">Reminders continue for legal cases until you Close the case.</div>`;
+      } else if(action === 'rtgs'){
+        f.innerHTML = `<label>Payment Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>UTR / Reference</label><input id="m-ref" type="text" placeholder="RTGS/NEFT reference" />
+                       <label>Amount Received (₹)</label><input id="m-amount" type="text" placeholder="e.g. 5,00,000" />` + REMARKS;
+      } else if(action === 'close'){
+        f.innerHTML = `<label>Close Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Closure Reason</label><input id="m-reason" type="text" placeholder="e.g. settled out of court" />` + REMARKS;
+      } else {
+        f.innerHTML = `<label>Deposit Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Deposited Into (Bank / A/c)</label><input id="m-bank" type="text" placeholder="e.g. HDFC Current A/c" />
+                       <label>Reference / Slip No.</label><input id="m-ref" type="text" placeholder="optional" />` + REMARKS;
+      }
+      document.getElementById('modalBg').classList.add('show');
+    }
+
+    function openOverride(id, amountVal, isoDate){
+      current = { action:'override', id }; confirmBtn.style.display='';
+      document.getElementById('modalTitle').textContent = '✎ Edit Locked Fields (audited)';
+      document.getElementById('modalFields').innerHTML =
+        `<label>Cheque Date</label><input id="o-date" type="date" value="${isoDate||''}" />
+         <label>Amount (₹)</label><input id="o-amount" type="text" value="${amountVal||''}" />
+         <label>Reason (required)</label><input id="o-reason" type="text" placeholder="why this correction is needed" />
+         <div class="req-note">This change is recorded in the edit log against your name.</div>`;
+      document.getElementById('modalBg').classList.add('show');
+    }
+
+    async function showHistory(id){
+      current = { action:'history', id }; confirmBtn.style.display='none';
+      document.getElementById('modalTitle').textContent = 'Cheque History';
+      const f = document.getElementById('modalFields'); f.innerHTML = '<div class="muted">Loading…</div>';
+      document.getElementById('modalBg').classList.add('show');
+      try{
+        const res = await fetch(`/cheque/${id}/history`); const data = await res.json();
+        if(!data.events || !data.events.length){ f.innerHTML = '<div class="muted">No events yet.</div>'; return; }
+        f.innerHTML = '<ul class="timeline">' + data.events.map(e=>{
+          const bits = [e.action_date, e.bank, e.reference, e.reason].filter(Boolean).join(' · ');
+          return `<li><div class="tl-action">${esc(e.action)}</div><div class="tl-meta">${esc(bits)}</div>
+                   ${e.remarks?`<div class="tl-remark">“${esc(e.remarks)}”</div>`:''}</li>`;
+        }).join('') + '</ul>';
+      }catch{ f.innerHTML = '<div class="muted">Could not load history.</div>'; }
+    }
+
+    function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
+    function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    confirmBtn.addEventListener('click', async ()=>{
+      const { action, id } = current; let url, body;
+      if(action === 'override'){
+        const reason = document.getElementById('o-reason')?.value.trim();
+        if(!reason){ showToast('⚠ A reason is required', true); return; }
+        url = `/cheque/${id}/override`;
+        body = { cheque_date_iso: document.getElementById('o-date')?.value,
+                 amount_numbers: document.getElementById('o-amount')?.value, reason };
+      } else {
+        url = `/cheque/${id}/${action}`;
+        body = { date: document.getElementById('m-date')?.value, remarks: document.getElementById('m-remarks')?.value };
+        if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
+        else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
+        else if(action === 'rtgs'){ body.reference = document.getElementById('m-ref')?.value; body.amount = document.getElementById('m-amount')?.value; }
+        else if(action === 'deposit' || action === 'redeposit'){ body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
+      }
+      try{
+        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const data = await res.json();
+        if(data.success){ showToast('✓ Updated'); setTimeout(()=>location.reload(), 700); }
+        else showToast('⚠ '+(data.error||'Failed'), true);
+      }catch{ showToast('⚠ Network error', true); }
+      closeModal();
+    });
+
+    function showToast(msg, err=false){ const t=document.getElementById('toast');
+      t.textContent=msg; t.classList.toggle('error-toast',err); t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2500); }
+    document.getElementById('modalBg').addEventListener('click', e=>{ if(e.target.id==='modalBg') closeModal(); });
+  </script>
+</body>
+</html>

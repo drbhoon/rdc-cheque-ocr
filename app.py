@@ -552,12 +552,12 @@ def staff_upload():
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM staff_master")
-            count = cur.fetchone()[0]
+            cur.execute(f"SELECT {', '.join(STAFF_FIELDS)} FROM staff_master ORDER BY sales_name")
+            staff = [dict(zip(STAFF_FIELDS, r)) for r in cur.fetchall()]
             cur.close()
         finally:
             conn.close()
-        return render_template("staff.html", count=count)
+        return render_template("staff.html", count=len(staff), staff=staff, fields=STAFF_FIELDS)
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":
@@ -612,6 +612,74 @@ def staff_upload():
         conn.commit()
         cur.close()
         return jsonify({"success": True, "saved": saved})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+STAFF_EDITABLE = ["sales_email", "location", "plant", "accounts_email", "bh_name", "bh_email"]
+
+
+@app.route("/staff/update", methods=["POST"])
+@role_required("HO_ADMIN")
+def staff_update():
+    """Edit one staff record's fields (keyed by sales_name); log each change."""
+    d = request.get_json(silent=True) or {}
+    name = (d.get("sales_name") or "").strip()
+    if not name:
+        return jsonify({"error": "sales_name is required"}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {', '.join(STAFF_EDITABLE)} FROM staff_master WHERE sales_name=%s", (name,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Staff not found"}), 404
+        old = dict(zip(STAFF_EDITABLE, row))
+        sets, vals, changes = [], [], []
+        for f in STAFF_EDITABLE:
+            if f in d:
+                new = (str(d[f]).strip() or None) if d[f] is not None else None
+                if new != old[f]:
+                    sets.append(f"{f}=%s"); vals.append(new)
+                    changes.append((f, old[f], new))
+        if not sets:
+            cur.close()
+            return jsonify({"success": True, "unchanged": True})
+        vals.append(name)
+        cur.execute(f"UPDATE staff_master SET {', '.join(sets)}, updated_at=NOW() WHERE sales_name=%s", vals)
+        conn.commit()
+        cur.close()
+        for f, o, n in changes:
+            log_change("STAFF", name, f, o, n)
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/staff/delete", methods=["POST"])
+@role_required("HO_ADMIN")
+def staff_delete():
+    d = request.get_json(silent=True) or {}
+    name = (d.get("sales_name") or "").strip()
+    if not name:
+        return jsonify({"error": "sales_name is required"}), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM staff_master WHERE sales_name=%s", (name,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        if deleted:
+            log_change("STAFF", name, "delete", name, None)
+        return jsonify({"success": bool(deleted)})
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -779,6 +847,130 @@ def report():
     ]
     return render_template("report.html", groups=groups, total=total,
                            today=today.isoformat(), locations=CHEQUE_LOCATIONS)
+
+
+# ── Routes: dashboard (all cheques, history + filters) ───────────────────────
+
+DASH_COLS = [
+    "id", "bank_name", "account_number", "cheque_number", "payee",
+    "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
+    "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
+    "deposited_date", "cleared_date",
+]
+
+# Filter token -> human label (order shown in the UI)
+DASH_FILTERS = [
+    ("all",        "All"),
+    ("overdue",    "Overdue"),
+    ("pending",    "Pending"),
+    ("deposited",  "Deposited"),
+    ("bounced",    "Bounced"),
+    ("redeposited","Re-deposited"),
+    ("cleared",    "Cleared"),
+    ("legal",      "Legal"),
+    ("rtgs",       "RTGS-settled"),
+    ("closed",     "Closed"),
+]
+
+ACTIVE_STATUSES = ("PENDING", "BOUNCED", "LEGAL", "DEPOSITED")
+
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    today = date.today()
+    f_status = (request.args.get("status") or "all").lower()
+    q        = (request.args.get("q") or "").strip()
+    f_sales  = (request.args.get("sales") or "").strip()
+    f_loc    = (request.args.get("location") or "").strip()
+    f_plant  = (request.args.get("plant") or "").strip()
+    f_from   = parse_iso_date(request.args.get("from"))
+    f_to     = parse_iso_date(request.args.get("to"))
+
+    where, params = [], []
+
+    # status / derived filters
+    status_map = {"pending": "PENDING", "deposited": "DEPOSITED", "bounced": "BOUNCED",
+                  "cleared": "CLEARED", "legal": "LEGAL", "rtgs": "RTGS_SETTLED",
+                  "closed": "CLOSED"}
+    if f_status in status_map:
+        where.append("status = %s")
+        params.append(status_map[f_status])
+    elif f_status == "overdue":
+        where.append("status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s")
+        params.append(today)
+    elif f_status == "redeposited":
+        where.append("EXISTS (SELECT 1 FROM cheque_events e "
+                     "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
+
+    if q:
+        where.append("(payee ILIKE %s OR account_number ILIKE %s OR cheque_number ILIKE %s "
+                     "OR issuer_name ILIKE %s)")
+        params += [f"%{q}%"] * 4
+    if f_sales:
+        where.append("sales_name = %s"); params.append(f_sales)
+    if f_loc:
+        where.append("location = %s"); params.append(f_loc)
+    if f_plant:
+        where.append("plant = %s"); params.append(f_plant)
+    if f_from:
+        where.append("COALESCE(deposit_due_date, cheque_date_iso) >= %s"); params.append(f_from)
+    if f_to:
+        where.append("COALESCE(deposit_due_date, cheque_date_iso) <= %s"); params.append(f_to)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT {', '.join(DASH_COLS)},
+                   (SELECT COUNT(*) FROM cheque_events e
+                    WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count
+            FROM cheques
+            {where_sql}
+            ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
+            """,
+            params,
+        )
+        cols = DASH_COLS + ["bounce_count"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Summary across ALL cheques (unfiltered), by status
+        cur.execute("SELECT status, COUNT(*), COALESCE(SUM(amount_value),0) "
+                    "FROM cheques GROUP BY status")
+        summary = {s: {"count": c, "amount": float(a)} for s, c, a in cur.fetchall()}
+        # Derived overdue count
+        cur.execute("SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
+                    "WHERE status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s",
+                    (today,))
+        oc, oa = cur.fetchone()
+        summary["OVERDUE"] = {"count": oc, "amount": float(oa)}
+
+        # Filter dropdown options
+        cur.execute("SELECT DISTINCT sales_name FROM cheques WHERE sales_name IS NOT NULL ORDER BY 1")
+        sales_opts = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT location FROM cheques WHERE location IS NOT NULL ORDER BY 1")
+        loc_opts = [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT plant FROM cheques WHERE plant IS NOT NULL ORDER BY 1")
+        plant_opts = [r[0] for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+
+    for r in rows:
+        cd = r["cheque_date_iso"]
+        r["stale"] = bool(cd and (today - cd).days > 90 and r["status"] in ACTIVE_STATUSES)
+
+    total_amount = sum(r["amount_value"] or 0 for r in rows)
+    return render_template(
+        "dashboard.html", rows=rows, summary=summary, filters=DASH_FILTERS,
+        active=f_status, q=q, sales_opts=sales_opts, loc_opts=loc_opts, plant_opts=plant_opts,
+        sel_sales=f_sales, sel_loc=f_loc, sel_plant=f_plant,
+        f_from=request.args.get("from") or "", f_to=request.args.get("to") or "",
+        total_amount=total_amount, today=today.isoformat(), locations=CHEQUE_LOCATIONS,
+    )
 
 
 @app.route("/cheque/<int:cid>/deposit", methods=["POST"])

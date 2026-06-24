@@ -30,10 +30,29 @@
     .msg.err { display: block; background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
     .spinner { display:inline-block; width:16px; height:16px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:8px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .listing { width: 100%; max-width: 1100px; margin-top: 26px; }
+    .listing-title { font-size: 15px; margin-bottom: 12px; color: #cbd5e1; }
+    .tablewrap { overflow-x: auto; }
+    .staff-table { width: 100%; border-collapse: collapse; background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; overflow: hidden; }
+    .staff-table th, .staff-table td { text-align: left; padding: 7px 8px; font-size: 12px; border-bottom: 1px solid #2d3148; }
+    .staff-table th { background: #161922; color: #94a3b8; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .5px; }
+    .staff-table tr:last-child td { border-bottom: none; }
+    .staff-table .namecell { font-weight: 600; color: #e2e8f0; white-space: nowrap; }
+    .staff-table input { width: 100%; min-width: 110px; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 6px 8px; font-size: 12px; outline: none; }
+    .staff-table input:focus { border-color: #4f6ef7; }
+    .staff-table tr.dirty input { border-color: #3b4668; }
+    .rowact { white-space: nowrap; }
+    .mini { border: 1px solid #2d3148; background: #0f1117; border-radius: 6px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; margin-right: 4px; }
+    .mini.save { color: #4ade80; } .mini.save:hover { border-color: #4ade80; }
+    .mini.del { color: #fca5a5; } .mini.del:hover { border-color: #fca5a5; }
+    .empty { padding: 18px; text-align: center; color: #6b7280; font-size: 13px; background: #1a1d27; border: 1px dashed #2d3148; border-radius: 10px; }
+    .stoast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #059669; color: #fff; padding: 11px 24px; border-radius: 10px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .3s; z-index: 99; }
+    .stoast.show { opacity: 1; } .stoast.err { background: #dc2626; }
   </style>
 </head>
 <body>
-  <div class="topbar"><a href="/">＋ Scan</a><a href="/report">📋 Report</a>
+  <div class="topbar"><a href="/">＋ Scan</a><a href="/dashboard">📊 Dashboard</a><a href="/report">📋 Report</a>
     {% if user and user.role == 'HO_ADMIN' %}<a href="/users">👤 Users</a>{% endif %}
     {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
   <div class="card">
@@ -62,9 +81,77 @@
     </div>
   </div>
 
+  <div class="listing">
+    <h2 class="listing-title">Loaded Staff ({{ count }})</h2>
+    {% if staff %}
+    <div class="tablewrap">
+    <table class="staff-table">
+      <thead><tr>
+        <th>Sales Name</th><th>Sales Email</th><th>Location</th><th>Plant</th>
+        <th>Accounts Email</th><th>BH Name</th><th>BH Email</th><th>Actions</th>
+      </tr></thead>
+      <tbody>
+        {% for s in staff %}
+        <tr data-name="{{ s.sales_name }}">
+          <td class="namecell">{{ s.sales_name }}</td>
+          <td><input data-f="sales_email"    value="{{ s.sales_email or '' }}" /></td>
+          <td><input data-f="location"       value="{{ s.location or '' }}" /></td>
+          <td><input data-f="plant"          value="{{ s.plant or '' }}" /></td>
+          <td><input data-f="accounts_email" value="{{ s.accounts_email or '' }}" /></td>
+          <td><input data-f="bh_name"        value="{{ s.bh_name or '' }}" /></td>
+          <td><input data-f="bh_email"       value="{{ s.bh_email or '' }}" /></td>
+          <td class="rowact">
+            <button class="mini save" onclick="saveStaff(this)">Save</button>
+            <button class="mini del" onclick="deleteStaff(this)">Delete</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="empty">No staff loaded yet. Upload the template above.</div>
+    {% endif %}
+  </div>
+
+  <div class="stoast" id="stoast"></div>
+
   <script>
     (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
       if(r.status===401){ location.href='/login'; } return r; }; })();
+
+    function stoast(m, err){ const t=document.getElementById('stoast');
+      t.textContent=m; t.classList.toggle('err',!!err); t.classList.add('show');
+      setTimeout(()=>t.classList.remove('show'),2200); }
+
+    async function saveStaff(btn){
+      const tr = btn.closest('tr'); const name = tr.dataset.name;
+      const body = { sales_name: name };
+      tr.querySelectorAll('input[data-f]').forEach(i => body[i.dataset.f] = i.value);
+      btn.disabled = true; btn.textContent = '…';
+      try{
+        const res = await fetch('/staff/update', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+        const data = await res.json();
+        if(data.success){ stoast('✓ Saved "'+name+'"'); tr.classList.remove('dirty'); }
+        else stoast('⚠ '+(data.error||'Failed'), true);
+      }catch{ stoast('⚠ Network error', true); }
+      btn.disabled = false; btn.textContent = 'Save';
+    }
+
+    async function deleteStaff(btn){
+      const tr = btn.closest('tr'); const name = tr.dataset.name;
+      if(!confirm('Delete staff record "'+name+'"? This cannot be undone.')) return;
+      try{
+        const res = await fetch('/staff/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sales_name:name})});
+        const data = await res.json();
+        if(data.success){ stoast('✓ Deleted "'+name+'"'); tr.remove(); }
+        else stoast('⚠ '+(data.error||'Failed'), true);
+      }catch{ stoast('⚠ Network error', true); }
+    }
+
+    // mark a row dirty when edited
+    document.querySelectorAll('.staff-table input[data-f]').forEach(i =>
+      i.addEventListener('input', () => i.closest('tr').classList.add('dirty')));
     const file=document.getElementById('file'), upBtn=document.getElementById('upBtn'),
       fname=document.getElementById('fname'), msg=document.getElementById('msg');
     let selected=null;

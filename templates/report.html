@@ -97,7 +97,10 @@
       <div class="links">
         <span class="today">Today: {{ today }}</span>
         <a href="/">＋ Scan</a>
+        <a href="/dashboard">📊 Dashboard</a>
+        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/users">👤 Users</a>{% endif %}
         <a href="/export" target="_blank">📥 Excel</a>
+        {% if user %}<a href="/logout">Logout</a>{% endif %}
       </div>
     </div>
 
@@ -147,7 +150,10 @@
                 {% endif %}
                 <button class="act" onclick="showHistory({{ r.id }})">History</button>
                 {% if user and user.role == 'HO_ADMIN' %}
-                  <button class="act override" onclick="openOverride({{ r.id }}, {{ r.amount_value if r.amount_value is not none else 'null' }}, '{{ r.cheque_date_iso.isoformat() if r.cheque_date_iso else '' }}')">✎ Edit</button>
+                  <button class="act override" data-id="{{ r.id }}"
+                    data-amount="{{ r.amount_value if r.amount_value is not none else '' }}"
+                    data-date="{{ r.cheque_date_iso.isoformat() if r.cheque_date_iso else '' }}"
+                    onclick="openOverride(this.dataset.id, this.dataset.amount, this.dataset.date)">✎ Edit</button>
                 {% endif %}
               </div>
             </td>
