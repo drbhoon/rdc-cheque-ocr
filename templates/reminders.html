@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reminders — Cheque Tracker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 22px 16px 60px; }
+    .topbar { width: 100%; max-width: 760px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-size: 13px; }
+    .topbar .links a { color: #7c9bff; text-decoration: none; margin-left: 16px; }
+    .who { color: #6b7280; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 16px; padding: 28px; width: 100%; max-width: 760px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+    h1 { font-size: 20px; margin-bottom: 6px; }
+    .sub { font-size: 13px; color: #6b7280; margin-bottom: 20px; }
+    .status { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+    .st { background: #0f1117; border: 1px solid #2d3148; border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+    .st .k { color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+    .st .v { font-weight: 600; }
+    .ok { color: #4ade80; } .bad { color: #f87171; }
+    .btns { display: flex; gap: 10px; margin: 18px 0; flex-wrap: wrap; }
+    .btn { border: none; border-radius: 9px; padding: 11px 20px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn.preview { background: #2d3148; color: #cbd5e1; }
+    .btn.send { background: linear-gradient(135deg,#059669,#047857); color: #fff; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .spinner { display:inline-block; width:15px; height:15px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; margin-right:7px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .result { margin-top: 8px; }
+    .result table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    .result th, .result td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #2d3148; }
+    .result th { color: #94a3b8; font-size: 11px; text-transform: uppercase; }
+    .pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+    .pill.sent { background: rgba(34,197,94,.15); color: #4ade80; }
+    .pill.dry  { background: rgba(79,110,247,.15); color: #93b0ff; }
+    .pill.err  { background: rgba(239,68,68,.15); color: #fca5a5; }
+    .note { font-size: 12.5px; color: #94a3b8; background: #0f1117; border: 1px solid #2d3148; border-radius: 10px; padding: 14px; margin-top: 18px; line-height: 1.6; }
+    .note code { background: #161922; padding: 2px 6px; border-radius: 5px; color: #cbd5e1; }
+    .msg { margin-top: 12px; font-size: 14px; padding: 11px 15px; border-radius: 9px; display: none; }
+    .msg.show.ok2 { display:block; background: rgba(34,197,94,0.12); color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
+    .msg.show.err2 { display:block; background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="who">Signed in as <b>{{ user.email }}</b></div>
+    <div class="links"><a href="/dashboard">📊 Dashboard</a><a href="/report">📋 Report</a><a href="/logout">Logout</a></div>
+  </div>
+
+  <div class="card">
+    <h1>✉️ Cheque Reminders</h1>
+    <div class="sub">Daily digest to each Accounts incharge, each Business Head, and the HO mailbox — listing their open cheques (overdue / due-soon / bounced / legal).</div>
+
+    <div class="status">
+      <div class="st"><div class="k">Email sending (SMTP)</div>
+        <div class="v">{% if smtp_ready %}<span class="ok">✓ Configured</span>{% else %}<span class="bad">✗ Not configured</span>{% endif %}</div></div>
+      <div class="st"><div class="k">From address</div><div class="v">{{ smtp_from }}</div></div>
+      <div class="st"><div class="k">HO mailbox</div><div class="v">{{ ho_email }}</div></div>
+      <div class="st"><div class="k">Daily cron key</div>
+        <div class="v">{% if cron_ready %}<span class="ok">✓ Set</span>{% else %}<span class="bad">✗ Not set</span>{% endif %}</div></div>
+    </div>
+
+    <div class="btns">
+      <button class="btn preview" id="previewBtn">👁 Preview (no email sent)</button>
+      <button class="btn send" id="sendBtn" {% if not smtp_ready %}disabled title="Configure SMTP first"{% endif %}>📤 Send now</button>
+    </div>
+    <div class="msg" id="msg"></div>
+    <div class="result" id="result"></div>
+
+    <div class="note">
+      <b>Automated daily schedule (Railway):</b><br>
+      Add a <b>Cron</b> in Railway that calls this URL once a day (e.g. <code>30 3 * * *</code> UTC = 9:00 AM IST):<br>
+      <code>https://pdc.bhoon.org/cron/reminders?key=YOUR_CRON_SECRET</code><br>
+      where <code>YOUR_CRON_SECRET</code> matches the <code>CRON_SECRET</code> Railway variable. Reminders automatically
+      exclude cleared, RTGS-settled and closed cheques; legal cases keep appearing until you Close them.
+    </div>
+  </div>
+
+  <script>
+    (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
+      if(r.status===401){ location.href='/login'; } return r; }; })();
+    const msg = document.getElementById('msg'), result = document.getElementById('result');
+    const previewBtn = document.getElementById('previewBtn'), sendBtn = document.getElementById('sendBtn');
+
+    function showMsg(text, ok){ msg.className = 'msg show ' + (ok?'ok2':'err2'); msg.textContent = text; }
+
+    function renderResults(data){
+      const rows = (data.results||[]).map(r => {
+        const pill = r.error ? `<span class="pill err">error</span>`
+                   : r.sent ? `<span class="pill sent">sent</span>`
+                   : `<span class="pill dry">preview</span>`;
+        return `<tr><td>${r.to}</td><td>${r.label||''}</td><td style="text-align:center">${r.count}</td>
+                <td>${pill}${r.error?` <span style="color:#fca5a5">${r.error}</span>`:''}</td></tr>`;
+      }).join('');
+      result.innerHTML = `<div style="font-size:13px;color:#94a3b8;margin-top:10px">
+          ${data.open_cheques} open cheque(s) · ${data.recipients} recipient(s)${data.ho_configured?'':' · ⚠ HO mailbox not set'}</div>
+        <table><tr><th>Recipient</th><th>Role</th><th style="text-align:center">Cheques</th><th>Status</th></tr>${rows||''}</table>`;
+    }
+
+    async function run(dry, btn){
+      const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Working…';
+      msg.className = 'msg'; result.innerHTML = '';
+      try{
+        const res = await fetch('/reminders/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dry})});
+        const data = await res.json();
+        if(data.error){ showMsg('⚠ '+data.error, false); }
+        else {
+          const sent = (data.results||[]).filter(r=>r.sent).length;
+          const errs = (data.results||[]).filter(r=>r.error).length;
+          if(dry) showMsg(`Preview: ${data.recipients} recipient(s) would receive a digest.`, true);
+          else showMsg(`Sent ${sent} email(s)${errs?`, ${errs} failed`:''}.`, errs===0);
+          renderResults(data);
+        }
+      }catch{ showMsg('⚠ Network error', false); }
+      btn.disabled = false; btn.innerHTML = orig;
+    }
+
+    previewBtn.addEventListener('click', ()=>run(true, previewBtn));
+    sendBtn.addEventListener('click', ()=>{ if(confirm('Send reminder emails now to all recipients?')) run(false, sendBtn); });
+  </script>
+</body>
+</html>

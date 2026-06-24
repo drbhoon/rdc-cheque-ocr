@@ -98,7 +98,7 @@
         <span class="today">Today: {{ today }}</span>
         <a href="/">＋ Scan</a>
         <a href="/dashboard">📊 Dashboard</a>
-        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/users">👤 Users</a>{% endif %}
+        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
         <a href="/export" target="_blank">📥 Excel</a>
         {% if user %}<a href="/logout">Logout</a>{% endif %}
       </div>

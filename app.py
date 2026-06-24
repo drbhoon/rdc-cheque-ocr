@@ -3,6 +3,9 @@ import re
 import json
 import base64
 import io
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from functools import wraps
 from datetime import date, datetime, timedelta
 from flask import (Flask, request, jsonify, render_template, send_file,
@@ -1185,6 +1188,215 @@ def _transition(cid, new_status, action, action_date,
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+
+# ── Email reminders (daily digest to Accounts / BH / HO) ─────────────────────
+
+def smtp_config():
+    user = (os.environ.get("SMTP_USER") or "").strip()
+    return {
+        "host": os.environ.get("SMTP_HOST", "smtp.gmail.com"),
+        "port": int(os.environ.get("SMTP_PORT", "587")),
+        "user": user,
+        "password": os.environ.get("SMTP_APP_PASSWORD", ""),
+        "from": (os.environ.get("SMTP_FROM") or user).strip(),
+    }
+
+
+def send_email(to_addr, subject, html):
+    cfg = smtp_config()
+    if not cfg["user"] or not cfg["password"]:
+        raise RuntimeError("SMTP not configured (set SMTP_USER and SMTP_APP_PASSWORD).")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = cfg["from"]
+    msg["To"] = to_addr
+    msg.attach(MIMEText(html, "html"))
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as server:
+        server.starttls()
+        server.login(cfg["user"], cfg["password"])
+        server.sendmail(cfg["from"], [to_addr], msg.as_string())
+
+
+REMINDER_COLS = ["id", "bank_name", "account_number", "cheque_number", "payee",
+                 "amount_value", "deposit_due_date", "status", "sales_name", "plant",
+                 "location", "accounts_email", "bh_email"]
+
+
+def _open_reminder_rows():
+    """Cheques that still need attention: overdue/due-soon PENDING, plus all BOUNCED & LEGAL."""
+    today = date.today()
+    soon = today + timedelta(days=2)
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT {', '.join(REMINDER_COLS)}
+            FROM cheques
+            WHERE status IN ('PENDING','BOUNCED','LEGAL')
+              AND (status IN ('BOUNCED','LEGAL') OR deposit_due_date <= %s)
+            ORDER BY deposit_due_date NULLS LAST, id
+            """,
+            (soon,),
+        )
+        rows = [dict(zip(REMINDER_COLS, r)) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    return rows, today
+
+
+def _category(r, today):
+    if r["status"] == "BOUNCED":
+        return "Bounced — awaiting action"
+    if r["status"] == "LEGAL":
+        return "Legal case — open"
+    due = r["deposit_due_date"]
+    if due and due < today:
+        return "Overdue"
+    return "Due within 2 days"
+
+
+def _digest_html(cheques, today, recipient_label):
+    cats = ["Overdue", "Due within 2 days", "Bounced — awaiting action", "Legal case — open"]
+    by_cat = {c: [] for c in cats}
+    for r in cheques:
+        by_cat[_category(r, today)].append(r)
+
+    def money(v):
+        return "₹ {:,.0f}".format(v) if v is not None else "—"
+
+    parts = [
+        f"""<div style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:720px">
+        <h2 style="margin:0 0 4px">PDC Cheque Reminder</h2>
+        <p style="margin:0 0 16px;color:#555">For {recipient_label} · {today.strftime('%d %b %Y')} ·
+        {len(cheques)} cheque(s) need attention</p>"""
+    ]
+    total = 0
+    for cat in cats:
+        items = by_cat[cat]
+        if not items:
+            continue
+        color = {"Overdue": "#c0392b", "Due within 2 days": "#b7791f",
+                 "Bounced — awaiting action": "#c0392b", "Legal case — open": "#7c3aed"}[cat]
+        parts.append(f'<h3 style="margin:18px 0 6px;color:{color};font-size:15px">{cat} ({len(items)})</h3>')
+        parts.append('<table style="border-collapse:collapse;width:100%;font-size:13px">'
+                     '<tr style="background:#f3f4f6;text-align:left">'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Due</th>'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Bank / Cheque No</th>'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Pay To</th>'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Sales / Plant</th>'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">Amount</th></tr>')
+        for r in items:
+            total += r["amount_value"] or 0
+            due = r["deposit_due_date"].strftime("%d-%b-%Y") if r["deposit_due_date"] else "—"
+            parts.append(
+                f'<tr><td style="padding:6px 8px;border:1px solid #e5e7eb">{due}</td>'
+                f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["bank_name"] or "—"}<br>'
+                f'<span style="color:#888">{r["cheque_number"] or ""}</span></td>'
+                f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["payee"] or "—"}</td>'
+                f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["sales_name"] or "—"}'
+                f'<br><span style="color:#888">{r["plant"] or ""}</span></td>'
+                f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{money(r["amount_value"])}</td></tr>'
+            )
+        parts.append("</table>")
+    parts.append(f'<p style="margin:16px 0 4px;font-weight:600">Total outstanding: {money(total)}</p>')
+    parts.append('<p style="color:#888;font-size:12px;margin-top:18px">'
+                 'Open <a href="https://pdc.bhoon.org/dashboard">the dashboard</a> to act on these cheques. '
+                 'This is an automated reminder.</p></div>')
+    return "".join(parts)
+
+
+def run_reminders(dry=False):
+    rows, today = _open_reminder_rows()
+    ho = (os.environ.get("HO_REMINDER_EMAIL") or "").strip()
+
+    buckets = {}  # email -> {label, ids:set, cheques:[]}
+
+    def add(email, label, r):
+        if not email:
+            return
+        key = email.strip().lower()
+        if not key:
+            return
+        b = buckets.setdefault(key, {"label": label, "ids": set(), "cheques": []})
+        if r["id"] not in b["ids"]:
+            b["ids"].add(r["id"])
+            b["cheques"].append(r)
+
+    for r in rows:
+        add(r["accounts_email"], "Accounts Incharge", r)
+        add(r["bh_email"], "Business Head", r)
+
+    if ho:
+        b = buckets.setdefault(ho.lower(), {"label": "HO Credit Control", "ids": set(), "cheques": []})
+        for r in rows:
+            if r["id"] not in b["ids"]:
+                b["ids"].add(r["id"])
+                b["cheques"].append(r)
+
+    results, sent_ids = [], set()
+    for email, b in buckets.items():
+        subject = f"PDC Reminder: {len(b['cheques'])} cheque(s) need attention — {today.strftime('%d %b %Y')}"
+        if dry:
+            results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": False})
+            continue
+        try:
+            send_email(email, subject, _digest_html(b["cheques"], today, b["label"]))
+            results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": True})
+            sent_ids |= b["ids"]
+        except Exception as e:
+            results.append({"to": email, "label": b["label"], "count": len(b["cheques"]),
+                            "sent": False, "error": str(e)})
+
+    if not dry and sent_ids:
+        conn = get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE cheques SET last_reminder_at=NOW() WHERE id = ANY(%s)", (list(sent_ids),))
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+
+    return {"open_cheques": len(rows), "recipients": len(buckets),
+            "ho_configured": bool(ho), "dry_run": dry, "results": results}
+
+
+@app.route("/cron/reminders")
+def cron_reminders():
+    """Hit daily by a scheduler. Protected by ?key=<CRON_SECRET>."""
+    secret = os.environ.get("CRON_SECRET", "")
+    if not secret or request.args.get("key") != secret:
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        return jsonify(run_reminders(dry=(request.args.get("dry") == "1")))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/reminders")
+@role_required("HO_ADMIN")
+def reminders_page():
+    cfg = smtp_config()
+    return render_template(
+        "reminders.html",
+        smtp_ready=bool(cfg["user"] and cfg["password"]),
+        smtp_from=cfg["from"] or "(not set)",
+        ho_email=os.environ.get("HO_REMINDER_EMAIL") or "(not set)",
+        cron_ready=bool(os.environ.get("CRON_SECRET")),
+    )
+
+
+@app.route("/reminders/run", methods=["POST"])
+@role_required("HO_ADMIN")
+def reminders_run():
+    dry = bool((request.get_json(silent=True) or {}).get("dry", False))
+    try:
+        return jsonify(run_reminders(dry=dry))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Routes: Excel export ─────────────────────────────────────────────────────

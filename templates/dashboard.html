@@ -87,7 +87,7 @@
       <div class="links">
         {% if user and user.role in ['HO_ADMIN','ACCOUNTS'] %}<a href="/">＋ Scan</a>{% endif %}
         <a href="/report">📋 Action List</a>
-        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/users">👤 Users</a>{% endif %}
+        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
         <a href="/export" target="_blank">📥 Excel</a>
         <a href="/logout">Logout ({{ user.role }})</a>
       </div>
