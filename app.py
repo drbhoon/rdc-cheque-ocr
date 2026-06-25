@@ -20,7 +20,14 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-insecure-change-me")
 
-ROLES = ("HO_ADMIN", "ACCOUNTS", "VIEWER")
+ROLES = ("HO_ADMIN", "ACCOUNTS", "SALES", "VIEWER")
+# Roles allowed to scan & upload cheques
+UPLOAD_ROLES = ("HO_ADMIN", "ACCOUNTS", "SALES")
+
+
+def landing_for(role):
+    """Where a user lands after login / when sent off a forbidden page."""
+    return "index" if role in UPLOAD_ROLES else "dashboard"
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "pdf"}
 STAFF_EXTENSIONS = {"xlsx", "xls"}
@@ -147,6 +154,7 @@ def init_db():
             )
         """)
         cur.execute("ALTER TABLE cheque_events ADD COLUMN IF NOT EXISTS remarks TEXT")
+        cur.execute("ALTER TABLE cheque_events ADD COLUMN IF NOT EXISTS done_by TEXT")
 
         # Users (login + roles)
         cur.execute("""
@@ -307,9 +315,11 @@ def _wants_json():
 def _deny(msg, code):
     if _wants_json():
         return jsonify({"error": msg}), code
-    if code == 401:
+    if code == 401 or not current_user():
         return redirect(url_for("login", next=request.path))
-    return render_template("login.html", error="You are not authorised for that page."), code
+    # Logged in but not allowed on this page — send them to a page they can use
+    # (their landing) rather than a dead-end "not authorised" screen.
+    return redirect(url_for(landing_for(current_user()["role"])))
 
 
 def role_required(*roles):
@@ -358,7 +368,7 @@ def log_change(entity_type, entity_id, field, old, new, reason=None):
 def login():
     if request.method == "GET":
         if current_user():
-            return redirect(url_for("index"))
+            return redirect(url_for(landing_for(current_user()["role"])))
         return render_template("login.html")
 
     email = (request.form.get("email") or "").strip().lower()
@@ -379,7 +389,7 @@ def login():
         return render_template("login.html", error="Invalid email or password."), 401
 
     session["user"] = {"email": row[0], "name": row[1], "role": row[3]}
-    nxt = request.args.get("next") or url_for("index")
+    nxt = request.args.get("next") or url_for(landing_for(row[3]))
     return redirect(nxt)
 
 
@@ -493,13 +503,13 @@ def users_update(uid):
 # ── Routes: scan UI ──────────────────────────────────────────────────────────
 
 @app.route("/")
-@role_required("HO_ADMIN", "ACCOUNTS")
+@role_required(*UPLOAD_ROLES)
 def index():
     return render_template("index.html")
 
 
 @app.route("/predict", methods=["POST"])
-@role_required("HO_ADMIN", "ACCOUNTS")
+@role_required(*UPLOAD_ROLES)
 def predict():
     if "image" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -693,7 +703,7 @@ def staff_delete():
 # ── Routes: save cheque ──────────────────────────────────────────────────────
 
 @app.route("/accept", methods=["POST"])
-@role_required("HO_ADMIN", "ACCOUNTS")
+@role_required(*UPLOAD_ROLES)
 def accept():
     data = request.get_json(silent=True)
     if not data:
@@ -855,7 +865,7 @@ def report():
 # ── Routes: dashboard (all cheques, history + filters) ───────────────────────
 
 DASH_COLS = [
-    "id", "bank_name", "account_number", "cheque_number", "payee",
+    "id", "bank_name", "account_number", "cheque_number", "payee", "issuer_name",
     "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
     "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
     "deposited_date", "cleared_date",
@@ -892,19 +902,25 @@ def dashboard():
 
     where, params = [], []
 
+    # A cheque is "re-deposited" if its status is DEPOSITED and it has a REDEPOSITED event.
+    REDEP_EXISTS = ("EXISTS (SELECT 1 FROM cheque_events e "
+                    "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
+
     # status / derived filters
-    status_map = {"pending": "PENDING", "deposited": "DEPOSITED", "bounced": "BOUNCED",
+    status_map = {"pending": "PENDING", "bounced": "BOUNCED",
                   "cleared": "CLEARED", "legal": "LEGAL", "rtgs": "RTGS_SETTLED",
                   "closed": "CLOSED"}
     if f_status in status_map:
         where.append("status = %s")
         params.append(status_map[f_status])
+    elif f_status == "deposited":
+        # first-time deposits only — re-deposited ones live in their own bucket
+        where.append(f"status = 'DEPOSITED' AND NOT {REDEP_EXISTS}")
+    elif f_status == "redeposited":
+        where.append(f"status = 'DEPOSITED' AND {REDEP_EXISTS}")
     elif f_status == "overdue":
         where.append("status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s")
         params.append(today)
-    elif f_status == "redeposited":
-        where.append("EXISTS (SELECT 1 FROM cheque_events e "
-                     "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
 
     if q:
         where.append("(payee ILIKE %s OR account_number ILIKE %s OR cheque_number ILIKE %s "
@@ -930,20 +946,33 @@ def dashboard():
             f"""
             SELECT {', '.join(DASH_COLS)},
                    (SELECT COUNT(*) FROM cheque_events e
-                    WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count
+                    WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count,
+                   {REDEP_EXISTS} AS is_redeposited
             FROM cheques
             {where_sql}
             ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
             """,
             params,
         )
-        cols = DASH_COLS + ["bounce_count"]
+        cols = DASH_COLS + ["bounce_count", "is_redeposited"]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
         # Summary across ALL cheques (unfiltered), by status
         cur.execute("SELECT status, COUNT(*), COALESCE(SUM(amount_value),0) "
                     "FROM cheques GROUP BY status")
         summary = {s: {"count": c, "amount": float(a)} for s, c, a in cur.fetchall()}
+        # Real totals (only true statuses — before adding derived overlays)
+        all_count = sum(v["count"] for v in summary.values())
+        all_amount = sum(v["amount"] for v in summary.values())
+
+        # Split DEPOSITED into first-time deposits vs re-deposited (status DEPOSITED + event)
+        cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
+                    f"WHERE status='DEPOSITED' AND {REDEP_EXISTS}")
+        rc, ra = cur.fetchone()
+        summary["REDEP"] = {"count": rc, "amount": float(ra)}
+        if "DEPOSITED" in summary:
+            summary["DEPOSITED"] = {"count": summary["DEPOSITED"]["count"] - rc,
+                                    "amount": summary["DEPOSITED"]["amount"] - float(ra)}
         # Derived overdue count
         cur.execute("SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
                     "WHERE status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s",
@@ -964,11 +993,14 @@ def dashboard():
 
     for r in rows:
         cd = r["cheque_date_iso"]
+        # Cheque expiry = 90 days from the cheque date (Indian cheque validity)
+        r["expiry_date"] = (cd + timedelta(days=90)) if cd else None
         r["stale"] = bool(cd and (today - cd).days > 90 and r["status"] in ACTIVE_STATUSES)
 
     total_amount = sum(r["amount_value"] or 0 for r in rows)
     return render_template(
         "dashboard.html", rows=rows, summary=summary, filters=DASH_FILTERS,
+        all_count=all_count, all_amount=all_amount,
         active=f_status, q=q, sales_opts=sales_opts, loc_opts=loc_opts, plant_opts=plant_opts,
         sel_sales=f_sales, sel_loc=f_loc, sel_plant=f_plant,
         f_from=request.args.get("from") or "", f_to=request.args.get("to") or "",
@@ -1119,9 +1151,10 @@ def override_cheque(cid):
         cur.execute(f"UPDATE cheques SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s", vals)
         # Event entry on the cheque's own timeline
         cur.execute(
-            """INSERT INTO cheque_events (cheque_id, action, action_date, reason, remarks)
-               VALUES (%s,'OVERRIDE',%s,%s,%s)""",
-            (cid, date.today(), reason, (d.get("remarks") or "").strip() or None),
+            """INSERT INTO cheque_events (cheque_id, action, action_date, reason, remarks, done_by)
+               VALUES (%s,'OVERRIDE',%s,%s,%s,%s)""",
+            (cid, date.today(), reason, (d.get("remarks") or "").strip() or None,
+             (current_user() or {}).get("email")),
         )
         conn.commit()
         cur.close()
@@ -1145,17 +1178,27 @@ def cheque_history(cid):
         cur.execute(
             """SELECT action,
                       TO_CHAR(action_date,'DD-Mon-YYYY'),
-                      bank, reference, reason, remarks,
+                      bank, reference, reason, remarks, done_by,
                       TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata','DD-Mon-YYYY HH24:MI')
                FROM cheque_events WHERE cheque_id=%s ORDER BY id""",
             (cid,),
         )
-        cols = ["action", "action_date", "bank", "reference", "reason", "remarks", "logged_at"]
+        cols = ["action", "action_date", "bank", "reference", "reason", "remarks", "done_by", "logged_at"]
         events = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Edit log (field-level changes to date/amount, with the user who made them)
+        cur.execute(
+            """SELECT field_changed, old_value, new_value, reason, changed_by,
+                      TO_CHAR(changed_at AT TIME ZONE 'Asia/Kolkata','DD-Mon-YYYY HH24:MI')
+               FROM change_log WHERE entity_type='CHEQUE' AND entity_id=%s ORDER BY id""",
+            (str(cid),),
+        )
+        ecols = ["field", "old", "new", "reason", "changed_by", "changed_at"]
+        edits = [dict(zip(ecols, r)) for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
-    return jsonify({"events": events})
+    return jsonify({"events": events, "edits": edits})
 
 
 def _transition(cid, new_status, action, action_date,
@@ -1176,9 +1219,10 @@ def _transition(cid, new_status, action, action_date,
             return jsonify({"error": "Cheque not found"}), 404
         cur.execute(
             """INSERT INTO cheque_events
-                 (cheque_id, action, action_date, bank, reference, reason, remarks)
-               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-            (cid, action, action_date, bank, reference, reason, remarks),
+                 (cheque_id, action, action_date, bank, reference, reason, remarks, done_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (cid, action, action_date, bank, reference, reason, remarks,
+             (current_user() or {}).get("email")),
         )
         conn.commit()
         cur.close()
@@ -1218,7 +1262,7 @@ def send_email(to_addr, subject, html):
         server.sendmail(cfg["from"], [to_addr], msg.as_string())
 
 
-REMINDER_COLS = ["id", "bank_name", "account_number", "cheque_number", "payee",
+REMINDER_COLS = ["id", "bank_name", "account_number", "cheque_number", "payee", "issuer_name",
                  "amount_value", "deposit_due_date", "status", "sales_name", "plant",
                  "location", "accounts_email", "bh_email"]
 
@@ -1285,7 +1329,7 @@ def _digest_html(cheques, today, recipient_label):
                      '<tr style="background:#f3f4f6;text-align:left">'
                      '<th style="padding:6px 8px;border:1px solid #e5e7eb">Due</th>'
                      '<th style="padding:6px 8px;border:1px solid #e5e7eb">Bank / Cheque No</th>'
-                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Pay To</th>'
+                     '<th style="padding:6px 8px;border:1px solid #e5e7eb">Customer</th>'
                      '<th style="padding:6px 8px;border:1px solid #e5e7eb">Sales / Plant</th>'
                      '<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">Amount</th></tr>')
         for r in items:
@@ -1295,7 +1339,7 @@ def _digest_html(cheques, today, recipient_label):
                 f'<tr><td style="padding:6px 8px;border:1px solid #e5e7eb">{due}</td>'
                 f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["bank_name"] or "—"}<br>'
                 f'<span style="color:#888">{r["cheque_number"] or ""}</span></td>'
-                f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["payee"] or "—"}</td>'
+                f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["issuer_name"] or r["payee"] or "—"}</td>'
                 f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["sales_name"] or "—"}'
                 f'<br><span style="color:#888">{r["plant"] or ""}</span></td>'
                 f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{money(r["amount_value"])}</td></tr>'

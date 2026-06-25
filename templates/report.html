@@ -242,18 +242,37 @@
       try{
         const res = await fetch(`/cheque/${id}/history`);
         const data = await res.json();
-        if(!data.events || !data.events.length){ f.innerHTML = '<div class="muted">No events yet.</div>'; return; }
-        f.innerHTML = '<ul class="timeline">' + data.events.map(e=>{
-          const bits = [e.action_date, e.bank, e.reference, e.reason].filter(Boolean).join(' · ');
-          return `<li><div class="tl-action">${esc(e.action)}</div>
-                   <div class="tl-meta">${esc(bits)}</div>
-                   ${e.remarks?`<div class="tl-remark">“${esc(e.remarks)}”</div>`:''}</li>`;
-        }).join('') + '</ul>';
+        f.innerHTML = renderHistory(data);
       }catch{ f.innerHTML = '<div class="muted">Could not load history.</div>'; }
     }
 
     function closeModal(){ document.getElementById('modalBg').classList.remove('show'); }
     function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+    const EDIT_LABELS = { cheque_date: 'Cheque Date', amount_numbers: 'Amount' };
+    function renderHistory(data){
+      const events = data.events || [];
+      const edits = (data.edits || []).filter(ed => EDIT_LABELS[ed.field]);
+      if(!events.length && !edits.length) return '<div class="muted">No events yet.</div>';
+      let html = '';
+      if(events.length){
+        html += '<ul class="timeline">' + events.map(e=>{
+          const bits = [e.action_date, e.bank, e.reference, e.reason].filter(Boolean).join(' · ');
+          const who = e.done_by ? ' · by ' + esc(e.done_by) : '';
+          return `<li><div class="tl-action">${esc(e.action)}</div>
+                   <div class="tl-meta">${esc(bits)}${who}</div>
+                   ${e.remarks?`<div class="tl-remark">“${esc(e.remarks)}”</div>`:''}</li>`;
+        }).join('') + '</ul>';
+      }
+      if(edits.length){
+        html += '<div style="font-size:12px;font-weight:700;color:#f59e0b;margin:14px 0 4px">Edit Log</div>'
+              + '<ul class="timeline">' + edits.map(ed=>{
+          return `<li><div class="tl-action">${esc(EDIT_LABELS[ed.field])}: ${esc(ed.old||'—')} → ${esc(ed.new||'—')}</div>
+                   <div class="tl-meta">${esc(ed.changed_at||'')} · by ${esc(ed.changed_by||'—')}${ed.reason?' · '+esc(ed.reason):''}</div></li>`;
+        }).join('') + '</ul>';
+      }
+      return html;
+    }
 
     confirmBtn.addEventListener('click', async ()=>{
       const { action, id } = current;
