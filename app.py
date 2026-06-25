@@ -1132,20 +1132,25 @@ def override_cheque(cid):
             return jsonify({"error": "Cheque not found"}), 404
         old_date, old_iso, old_amt_txt, old_amt_val = row
 
+        # Only update & log a field if it actually changed.
         sets, vals, changes = [], [], []
-        if has_date:
+        if has_date and new_iso != old_iso:
             new_raw = (str(new_date_raw).strip() if new_date_raw else None) or (
                 new_iso.isoformat() if new_iso else None)
             sets += ["cheque_date=%s", "cheque_date_iso=%s"]
             vals += [new_raw, new_iso]
             changes.append(("cheque_date", old_date, new_raw))
-            changes.append(("cheque_date_iso", old_iso, new_iso))
         if has_amt:
             new_val = parse_amount(new_amt_txt)
-            sets += ["amount_numbers=%s", "amount_value=%s"]
-            vals += [str(new_amt_txt).strip(), new_val]
-            changes.append(("amount_numbers", old_amt_txt, str(new_amt_txt).strip()))
-            changes.append(("amount_value", old_amt_val, new_val))
+            old_val_f = float(old_amt_val) if old_amt_val is not None else None
+            if new_val != old_val_f:
+                sets += ["amount_numbers=%s", "amount_value=%s"]
+                vals += [str(new_amt_txt).strip(), new_val]
+                changes.append(("amount_numbers", old_amt_txt, str(new_amt_txt).strip()))
+
+        if not sets:
+            cur.close()
+            return jsonify({"success": True, "unchanged": True})
 
         vals.append(cid)
         cur.execute(f"UPDATE cheques SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s", vals)
