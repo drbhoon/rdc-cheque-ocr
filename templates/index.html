@@ -288,6 +288,7 @@
         <div class="field-row"><div class="field-label">Deposit-Due Date</div>
           <input class="field-input" id="f-deposit_due_date" type="date" value="${escAttr(isoVal)}" /></div>
       </div>`;
+      html += `<div id="dateWarn"></div>`;
       html += `<div id="matchBadge"></div>`;
 
       // Physical location of the cheque
@@ -322,8 +323,10 @@
       $('f-cheque_date_iso').addEventListener('change', e=>{
         const due=$('f-deposit_due_date');
         if(!due.value || due.dataset.touched!=='1') due.value=e.target.value;
+        checkDate();
       });
       $('f-deposit_due_date').addEventListener('input', e=>{ e.target.dataset.touched='1'; });
+      checkDate();
 
       // Staff dropdown auto-fill
       $('f-sales_name').addEventListener('change', e=>{
@@ -332,6 +335,18 @@
       });
 
       updateBadge();
+    }
+
+    function checkDate(){
+      const w=$('dateWarn'); if(!w) return;
+      const v=$('f-cheque_date_iso')?.value; if(!v){ w.innerHTML=''; return; }
+      const d=new Date(v+'T00:00:00'), today=new Date(); today.setHours(0,0,0,0);
+      const days=Math.round((today-d)/86400000);
+      if(days>90){
+        w.innerHTML=`<span class="match-badge warn">⚠ Cheque date is ${days} days old — expired / likely misread. Please verify against the cheque.</span>`;
+      } else if(days < -400){
+        w.innerHTML=`<span class="match-badge warn">⚠ Cheque date is far in the future — please verify.</span>`;
+      } else w.innerHTML='';
     }
 
     function updateBadge(){

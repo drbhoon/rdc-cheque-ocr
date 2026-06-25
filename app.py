@@ -221,19 +221,20 @@ Fields:
 1. bank_name       — The DRAWER's bank. In India this is the bank name/logo printed at the TOP-LEFT of the cheque. IMPORTANT: ignore any rubber stamps near the bottom — those belong to the collecting/receipt bank, NOT the drawer's bank.
 2. account_number  — Read ONLY the digits printed in the "A/c No." field. Read them exactly, digit-for-digit. Do NOT pad, do NOT add leading or trailing zeros, do NOT read the MICR band at the very bottom. If you cannot read it confidently, return null.
 3. cheque_number   — The cheque number: in the MICR code line at the very bottom of the cheque, take ONLY the LEFTMOST block of digits (usually 6 digits, printed between ⑈ symbols). IGNORE all blocks to the right of it (those are the MICR/city-bank-branch code, account code and transaction code). Return null if not readable.
-4. date            — The date exactly as it appears (e.g. "14/7/22"), raw.
-5. cheque_date_iso — The same date normalised to ISO format YYYY-MM-DD. Prefer the boxed DD MM YYYY date (usually top-right) as it is most reliable; otherwise use the handwritten date. Return null if no date can be determined.
+4. date            — The CHEQUE DATE. Read it ONLY from the row of small digit boxes printed under the labels "D D  M M  Y Y Y Y" (the validity/date boxes, near the "Valid for three months from the date of issue" text). Read the eight boxes strictly left-to-right and group them as DD MM YYYY. Output this raw value as DD/MM/YYYY. CRITICAL: do NOT use any other date printed on the cheque — ignore stationery/print/reference codes such as "CAV/2024/UF 09/12/24", batch/print dates, and the validity wording itself. If the date boxes are blank or unreadable, fall back ONLY to a clearly handwritten date written next to the word "Date". Return null if no cheque date can be determined.
+5. cheque_date_iso — The SAME date from field 4, normalised to ISO YYYY-MM-DD (e.g. boxes "1 3 0 5 2 0 2 6" → date "13/05/2026" and cheque_date_iso "2026-05-13"). Must be consistent with field 4. Return null if no date.
 6. payee           — Name in the "Pay" field.
 7. amount_words    — Amount written in words on the "Rupees" line (e.g. "Five Lakhs Only").
 8. amount_numbers  — Amount in the numeric box (e.g. "5,00,000").
 9. issuer_name     — Account holder / drawer name printed at the bottom of the cheque.
 
 Rules:
+- The photo may be rotated or sideways. First mentally orient the cheque the right way up (bank logo top-left, MICR line along the bottom), then read fields by their printed labels — do NOT rely on absolute screen position.
 - Return ONLY a raw JSON object, no markdown fences, no explanation.
 - Use null for any field you cannot read confidently. Never guess.
 
-Example:
-{"bank_name":"ICICI Bank","account_number":"015601500005","cheque_number":"000501","date":"08/06/2026","cheque_date_iso":"2026-06-08","payee":"RDC Concrete","amount_words":"Five Lakhs Only","amount_numbers":"5,00,000","issuer_name":"BRIG K S BHOON"}"""
+Example (illustrative only — read the actual cheque; date boxes "0 5 0 7 2 0 2 5" → 05/07/2025):
+{"bank_name":"ICICI Bank","account_number":"015601500005","cheque_number":"000501","date":"05/07/2025","cheque_date_iso":"2025-07-05","payee":"RDC Concrete","amount_words":"Five Lakhs Only","amount_numbers":"5,00,000","issuer_name":"BRIG K S BHOON"}"""
 
 
 def build_source(img_bytes, media_type):
