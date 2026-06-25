@@ -115,6 +115,7 @@ def init_db():
             ("closed_by",         "TEXT"),
             ("close_reason",      "TEXT"),
             ("last_reminder_at",  "TIMESTAMPTZ"),
+            ("created_by",        "TEXT"),
         ]
         for name, ddl in cheque_cols:
             cur.execute(f"ALTER TABLE cheques ADD COLUMN IF NOT EXISTS {name} {ddl}")
@@ -746,6 +747,10 @@ def accept():
         cheque_date_iso  = parse_iso_date(data.get("cheque_date_iso"))
         deposit_due_date = parse_iso_date(data.get("deposit_due_date")) or cheque_date_iso
         amount_value     = parse_amount(data.get("amount_numbers"))
+        # Security cheques (held as collateral, no date) get no tracking
+        is_security = bool(data.get("is_security"))
+        status = "SECURITY" if is_security else "PENDING"
+        created_by = (current_user() or {}).get("email")
 
         cur.execute(
             """
@@ -753,18 +758,18 @@ def accept():
                 (bank_name, account_number, cheque_number, cheque_date, cheque_date_iso,
                  deposit_due_date, payee, amount_words, amount_numbers, amount_value,
                  issuer_name, status, sales_name, sales_email, location, plant,
-                 accounts_email, bh_name, bh_email, cheque_location, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                 accounts_email, bh_name, bh_email, cheque_location, created_by, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
             RETURNING id
             """,
             (
                 data.get("bank_name"), account_number, cheque_number,
                 data.get("date"), cheque_date_iso, deposit_due_date,
                 data.get("payee"), data.get("amount_words"), data.get("amount_numbers"),
-                amount_value, data.get("issuer_name"),
+                amount_value, data.get("issuer_name"), status,
                 data.get("sales_name"), data.get("sales_email"), data.get("location"),
                 data.get("plant"), data.get("accounts_email"), data.get("bh_name"),
-                data.get("bh_email"), data.get("cheque_location") or "Customer",
+                data.get("bh_email"), data.get("cheque_location") or "Customer", created_by,
             ),
         )
         new_id = cur.fetchone()[0]
@@ -844,18 +849,21 @@ def _fetch_pending():
 def report():
     rows = _fetch_pending()
     today = date.today()
-    soon = today + timedelta(days=2)
+    soon = today + timedelta(days=REMINDER_LEAD_DAYS)
 
-    overdue, due_soon, upcoming, undated = [], [], [], []
+    expired, due_soon, upcoming, undated, bounced, legal = [], [], [], [], [], []
     for r in rows:
-        due = r["deposit_due_date"]
-        # stale: Indian cheque invalid 3 months after cheque date
         cd = r["cheque_date_iso"]
         r["stale"] = bool(cd and (today - cd).days > 90)
+        if r["status"] == "BOUNCED":
+            bounced.append(r); continue
+        if r["status"] == "LEGAL":
+            legal.append(r); continue
+        due = r["deposit_due_date"]          # PENDING cheques bucket by due date
         if due is None:
             undated.append(r)
         elif due < today:
-            overdue.append(r)
+            expired.append(r)
         elif due <= soon:
             due_soon.append(r)
         else:
@@ -865,9 +873,11 @@ def report():
         return sum(x["amount_value"] or 0 for x in group)
 
     groups = [
-        ("Crossed deposit date (Overdue)", "overdue", overdue),
-        ("Due within 2 days", "soon", due_soon),
+        ("Expired Cheques (not deposited by due date)", "overdue", expired),
+        ("Due within 7 days", "soon", due_soon),
         ("Upcoming", "upcoming", upcoming),
+        ("Bounced — awaiting action", "overdue", bounced),
+        ("Legal cases", "upcoming", legal),
         ("No due date set", "undated", undated),
     ]
     return render_template("report.html", groups=groups, total=total,
@@ -887,7 +897,7 @@ DASH_COLS = [
 # Filter token -> human label (order shown in the UI)
 DASH_FILTERS = [
     ("all",        "All"),
-    ("overdue",    "Overdue"),
+    ("expired",    "Expired"),
     ("pending",    "Pending"),
     ("deposited",  "Deposited"),
     ("bounced",    "Bounced"),
@@ -896,6 +906,7 @@ DASH_FILTERS = [
     ("legal",      "Legal"),
     ("rtgs",       "RTGS-settled"),
     ("closed",     "Closed"),
+    ("security",   "Security"),
 ]
 
 ACTIVE_STATUSES = ("PENDING", "BOUNCED", "LEGAL", "DEPOSITED")
@@ -922,7 +933,7 @@ def dashboard():
     # status / derived filters
     status_map = {"pending": "PENDING", "bounced": "BOUNCED",
                   "cleared": "CLEARED", "legal": "LEGAL", "rtgs": "RTGS_SETTLED",
-                  "closed": "CLOSED"}
+                  "closed": "CLOSED", "security": "SECURITY"}
     if f_status in status_map:
         where.append("status = %s")
         params.append(status_map[f_status])
@@ -931,8 +942,9 @@ def dashboard():
         where.append(f"status = 'DEPOSITED' AND NOT {REDEP_EXISTS}")
     elif f_status == "redeposited":
         where.append(f"status = 'DEPOSITED' AND {REDEP_EXISTS}")
-    elif f_status == "overdue":
-        where.append("status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s")
+    elif f_status == "expired":
+        # PENDING cheques never deposited by their due date
+        where.append("status = 'PENDING' AND deposit_due_date < %s")
         params.append(today)
 
     if q:
@@ -986,12 +998,11 @@ def dashboard():
         if "DEPOSITED" in summary:
             summary["DEPOSITED"] = {"count": summary["DEPOSITED"]["count"] - rc,
                                     "amount": summary["DEPOSITED"]["amount"] - float(ra)}
-        # Derived overdue count
+        # Derived expired count: PENDING never deposited by due date
         cur.execute("SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
-                    "WHERE status IN ('PENDING','BOUNCED','LEGAL') AND deposit_due_date < %s",
-                    (today,))
+                    "WHERE status = 'PENDING' AND deposit_due_date < %s", (today,))
         oc, oa = cur.fetchone()
-        summary["OVERDUE"] = {"count": oc, "amount": float(oa)}
+        summary["EXPIRED"] = {"count": oc, "amount": float(oa)}
 
         # Filter dropdown options
         cur.execute("SELECT DISTINCT sales_name FROM cheques WHERE sales_name IS NOT NULL ORDER BY 1")
@@ -1187,6 +1198,32 @@ def override_cheque(cid):
         conn.close()
 
 
+@app.route("/cheque/<int:cid>/delete", methods=["POST"])
+@role_required("HO_ADMIN")
+def delete_cheque(cid):
+    """HO-Admin delete. Intended for Security cheques; logged to the audit trail.
+    Cheque events cascade-delete via the FK."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT status, payee, issuer_name, amount_numbers FROM cheques WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        cur.execute("DELETE FROM cheques WHERE id=%s", (cid,))
+        conn.commit()
+        cur.close()
+        desc = f"{row[0]} · {row[2] or row[1] or ''} · {row[3] or ''}".strip()
+        log_change("CHEQUE", cid, "delete", desc, None)
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route("/cheque/<int:cid>/history")
 @login_required
 def cheque_history(cid):
@@ -1203,6 +1240,16 @@ def cheque_history(cid):
         )
         cols = ["action", "action_date", "bank", "reference", "reason", "remarks", "done_by", "logged_at"]
         events = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+        # Prepend a CREATED entry (who first scanned/saved the cheque)
+        cur.execute(
+            "SELECT created_by, TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata','DD/MM/YYYY HH24:MI') "
+            "FROM cheques WHERE id=%s", (cid,))
+        crow = cur.fetchone()
+        if crow:
+            events.insert(0, {"action": "CREATED", "action_date": crow[1], "bank": None,
+                              "reference": None, "reason": None, "remarks": None,
+                              "done_by": crow[0], "logged_at": crow[1]})
 
         # Edit log (field-level changes to date/amount, with the user who made them)
         cur.execute(
@@ -1285,10 +1332,14 @@ REMINDER_COLS = ["id", "bank_name", "account_number", "cheque_number", "payee", 
                  "location", "accounts_email", "bh_email"]
 
 
+REMINDER_LEAD_DAYS = 7  # start nudging this many days before the deposit-due date
+
+
 def _open_reminder_rows():
-    """Cheques that still need attention: overdue/due-soon PENDING, plus all BOUNCED & LEGAL."""
+    """Cheques that still need attention: PENDING due within the next 7 days or already
+    past due (expired), plus all BOUNCED & LEGAL. Security cheques are never reminded."""
     today = date.today()
-    soon = today + timedelta(days=2)
+    soon = today + timedelta(days=REMINDER_LEAD_DAYS)
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -1316,12 +1367,13 @@ def _category(r, today):
         return "Legal case — open"
     due = r["deposit_due_date"]
     if due and due < today:
-        return "Overdue"
-    return "Due within 2 days"
+        return "Expired (not deposited by due date)"
+    return "Due within 7 days"
 
 
 def _digest_html(cheques, today, recipient_label):
-    cats = ["Overdue", "Due within 2 days", "Bounced — awaiting action", "Legal case — open"]
+    cats = ["Expired (not deposited by due date)", "Due within 7 days",
+            "Bounced — awaiting action", "Legal case — open"]
     by_cat = {c: [] for c in cats}
     for r in cheques:
         by_cat[_category(r, today)].append(r)
@@ -1340,7 +1392,7 @@ def _digest_html(cheques, today, recipient_label):
         items = by_cat[cat]
         if not items:
             continue
-        color = {"Overdue": "#c0392b", "Due within 2 days": "#b7791f",
+        color = {"Expired (not deposited by due date)": "#c0392b", "Due within 7 days": "#b7791f",
                  "Bounced — awaiting action": "#c0392b", "Legal case — open": "#7c3aed"}[cat]
         parts.append(f'<h3 style="margin:18px 0 6px;color:{color};font-size:15px">{cat} ({len(items)})</h3>')
         parts.append('<table style="border-collapse:collapse;width:100%;font-size:13px">'

@@ -120,6 +120,11 @@
     .field-copy:hover { color: #e2e8f0; border-color: #4f6ef7; }
     .two-col { display: flex; gap: 12px; }
     .two-col .field-row { flex: 1; }
+    .security-row { display: flex; align-items: center; gap: 9px; margin: 4px 0 14px; padding: 10px 12px;
+      background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.3); border-radius: 9px;
+      font-size: 13px; color: #fde047; cursor: pointer; }
+    .security-row input { width: 16px; height: 16px; accent-color: #eab308; cursor: pointer; }
+    .security-row span { color: #cbd5e1; } .security-row b { color: #fde047; }
 
     .match-badge {
       display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
@@ -281,8 +286,12 @@
       let html = `<div class="section-title">Cheque Details</div>`;
       CHEQUE_FIELDS.forEach(f=> html += inputRow(f));
 
+      // Security cheque toggle (no date, no tracking)
+      html += `<label class="security-row"><input type="checkbox" id="f-is_security" />
+        <span><b>Security cheque</b> — held as collateral, no date / no tracking</span></label>`;
+
       // Dates
-      html += `<div class="two-col">
+      html += `<div class="two-col" id="dateBlock">
         <div class="field-row"><div class="field-label">Cheque Date</div>
           <input class="field-input" id="f-cheque_date_iso" type="date" value="${escAttr(isoVal)}" /></div>
         <div class="field-row"><div class="field-label">Deposit-Due Date</div>
@@ -327,6 +336,14 @@
       });
       $('f-deposit_due_date').addEventListener('input', e=>{ e.target.dataset.touched='1'; });
       checkDate();
+
+      // Security cheque toggle — hide dates + warning when ticked
+      $('f-is_security').addEventListener('change', e=>{
+        const on=e.target.checked;
+        $('dateBlock').style.display = on ? 'none' : '';
+        if(on){ $('dateWarn').innerHTML=''; }
+        else checkDate();
+      });
 
       // Staff dropdown auto-fill
       $('f-sales_name').addEventListener('change', e=>{
@@ -374,9 +391,11 @@
     acceptBtn.addEventListener('click', async ()=>{
       const payload={};
       CHEQUE_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
-      payload.cheque_date_iso  = $('f-cheque_date_iso')?.value||null;
-      payload.deposit_due_date = $('f-deposit_due_date')?.value||null;
-      payload.date             = cheque.date || $('f-cheque_date_iso')?.value || null;
+      const sec = $('f-is_security')?.checked || false;
+      payload.is_security      = sec;
+      payload.cheque_date_iso  = sec ? null : ($('f-cheque_date_iso')?.value||null);
+      payload.deposit_due_date = sec ? null : ($('f-deposit_due_date')?.value||null);
+      payload.date             = sec ? null : (cheque.date || $('f-cheque_date_iso')?.value || null);
       payload.cheque_location  = $('f-cheque_location')?.value||'Customer';
       payload.sales_name = $('f-sales_name')?.value||null;
       STAFF_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);

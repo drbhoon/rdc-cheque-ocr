@@ -22,9 +22,10 @@
     .card .num { font-size: 22px; font-weight: 700; margin-top: 4px; }
     .card .amt { font-size: 12px; color: #6b7280; margin-top: 2px; }
     .dotc { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-    .c-all .dotc{background:#94a3b8}.c-overdue .dotc{background:#ef4444}.c-pending .dotc{background:#4f6ef7}
+    .c-all .dotc{background:#94a3b8}.c-expired .dotc{background:#ef4444}.c-pending .dotc{background:#4f6ef7}
     .c-deposited .dotc{background:#22d3ee}.c-bounced .dotc{background:#f87171}.c-redeposited .dotc{background:#93b0ff}
     .c-cleared .dotc{background:#4ade80}.c-legal .dotc{background:#a855f7}.c-rtgs .dotc{background:#5eead4}.c-closed .dotc{background:#6b7280}
+    .c-security .dotc{background:#eab308}
 
     /* Filter bar */
     form.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #161922; border: 1px solid #2d3148; border-radius: 10px; padding: 14px; margin-bottom: 20px; }
@@ -47,6 +48,7 @@
     .badge.BOUNCED{background:rgba(239,68,68,.15);color:#fca5a5}.badge.CLEARED{background:rgba(34,197,94,.15);color:#86efac}
     .badge.LEGAL{background:rgba(168,85,247,.18);color:#d8b4fe}.badge.RTGS_SETTLED{background:rgba(20,184,166,.18);color:#5eead4}
     .badge.CLOSED{background:rgba(107,114,128,.2);color:#cbd5e1}
+    .badge.SECURITY{background:rgba(234,179,8,.18);color:#fde047}
     .bounce-n { font-size: 9px; font-weight: 700; color: #fca5a5; margin-left: 5px; }
 
     .actions { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -54,6 +56,7 @@
     .act:hover { border-color: #4f6ef7; color: #fff; }
     .act.deposit{color:#4ade80}.act.bounce{color:#fca5a5}.act.redeposit{color:#93b0ff}.act.clear{color:#86efac}
     .act.legal{color:#d8b4fe}.act.rtgs{color:#5eead4}.act.close{color:#fbbf24}.act.override{color:#f59e0b}
+    .act.del{color:#f87171}.act.del:hover{border-color:#f87171}
 
     .empty { padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
     .tablewrap { overflow-x: auto; }
@@ -93,8 +96,8 @@
       </div>
     </div>
 
-    {% set order = [('all','All'),('overdue','Overdue'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('closed','Closed')] %}
-    {% set keymap = {'all':None,'overdue':'OVERDUE','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','closed':'CLOSED'} %}
+    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('closed','Closed'),('security','Security')] %}
+    {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','closed':'CLOSED','security':'SECURITY'} %}
     <div class="cards">
       {% for token, label in order %}
       {% set k = keymap[token] %}
@@ -171,10 +174,16 @@
               {% endif %}
               <button class="act" onclick="showHistory({{ r.id }})">History</button>
               {% if user and user.role == 'HO_ADMIN' %}
+                {% if r.status != 'SECURITY' %}
                 <button class="act override" data-id="{{ r.id }}"
                   data-amount="{{ r.amount_value if r.amount_value is not none else '' }}"
                   data-date="{{ r.cheque_date_iso.isoformat() if r.cheque_date_iso else '' }}"
                   onclick="openOverride(this.dataset.id, this.dataset.amount, this.dataset.date)">✎ Edit</button>
+                {% endif %}
+                {% if r.status == 'SECURITY' %}
+                <button class="act del" data-payee="{{ (r.issuer_name or r.payee or 'this cheque')|e }}"
+                  onclick="deleteCheque({{ r.id }}, this.dataset.payee)">🗑 Delete</button>
+                {% endif %}
               {% endif %}
             </div>
           </td>
@@ -207,6 +216,16 @@
     const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
 
     function setStatus(token){ document.getElementById('f-status').value = token; document.getElementById('filterForm').submit(); }
+
+    async function deleteCheque(id, label){
+      if(!confirm('Delete '+(label||'this cheque')+'? This permanently removes the entry and its history.')) return;
+      try{
+        const res = await fetch('/cheque/'+id+'/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const data = await res.json();
+        if(data.success){ showToast('✓ Deleted'); setTimeout(()=>location.reload(), 700); }
+        else showToast('⚠ '+(data.error||'Failed'), true);
+      }catch{ showToast('⚠ Network error', true); }
+    }
 
     function openModal(action, id){
       current = { action, id }; confirmBtn.style.display='';
