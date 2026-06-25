@@ -305,6 +305,17 @@ def inject_user():
     return {"user": current_user()}
 
 
+@app.template_filter("dmy")
+def _dmy(d):
+    """Render a date/datetime as DD/MM/YYYY (company format); '—' for empty."""
+    if not d:
+        return "—"
+    try:
+        return d.strftime("%d/%m/%Y")
+    except AttributeError:
+        return str(d)
+
+
 def _wants_json():
     """True for fetch/XHR/API calls; False for top-level page loads."""
     if request.method != "GET":
@@ -860,7 +871,8 @@ def report():
         ("No due date set", "undated", undated),
     ]
     return render_template("report.html", groups=groups, total=total,
-                           today=today.isoformat(), locations=CHEQUE_LOCATIONS)
+                           today=today.isoformat(), today_dmy=today.strftime("%d/%m/%Y"),
+                           locations=CHEQUE_LOCATIONS)
 
 
 # ── Routes: dashboard (all cheques, history + filters) ───────────────────────
@@ -1183,9 +1195,9 @@ def cheque_history(cid):
         cur = conn.cursor()
         cur.execute(
             """SELECT action,
-                      TO_CHAR(action_date,'DD-Mon-YYYY'),
+                      TO_CHAR(action_date,'DD/MM/YYYY'),
                       bank, reference, reason, remarks, done_by,
-                      TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata','DD-Mon-YYYY HH24:MI')
+                      TO_CHAR(created_at AT TIME ZONE 'Asia/Kolkata','DD/MM/YYYY HH24:MI')
                FROM cheque_events WHERE cheque_id=%s ORDER BY id""",
             (cid,),
         )
@@ -1195,7 +1207,7 @@ def cheque_history(cid):
         # Edit log (field-level changes to date/amount, with the user who made them)
         cur.execute(
             """SELECT field_changed, old_value, new_value, reason, changed_by,
-                      TO_CHAR(changed_at AT TIME ZONE 'Asia/Kolkata','DD-Mon-YYYY HH24:MI')
+                      TO_CHAR(changed_at AT TIME ZONE 'Asia/Kolkata','DD/MM/YYYY HH24:MI')
                FROM change_log WHERE entity_type='CHEQUE' AND entity_id=%s ORDER BY id""",
             (str(cid),),
         )
@@ -1320,7 +1332,7 @@ def _digest_html(cheques, today, recipient_label):
     parts = [
         f"""<div style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:720px">
         <h2 style="margin:0 0 4px">PDC Cheque Reminder</h2>
-        <p style="margin:0 0 16px;color:#555">For {recipient_label} · {today.strftime('%d %b %Y')} ·
+        <p style="margin:0 0 16px;color:#555">For {recipient_label} · {today.strftime('%d/%m/%Y')} ·
         {len(cheques)} cheque(s) need attention</p>"""
     ]
     total = 0
@@ -1340,7 +1352,7 @@ def _digest_html(cheques, today, recipient_label):
                      '<th style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">Amount</th></tr>')
         for r in items:
             total += r["amount_value"] or 0
-            due = r["deposit_due_date"].strftime("%d-%b-%Y") if r["deposit_due_date"] else "—"
+            due = r["deposit_due_date"].strftime("%d/%m/%Y") if r["deposit_due_date"] else "—"
             parts.append(
                 f'<tr><td style="padding:6px 8px;border:1px solid #e5e7eb">{due}</td>'
                 f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{r["bank_name"] or "—"}<br>'
@@ -1388,7 +1400,7 @@ def run_reminders(dry=False):
 
     results, sent_ids = [], set()
     for email, b in buckets.items():
-        subject = f"PDC Reminder: {len(b['cheques'])} cheque(s) need attention — {today.strftime('%d %b %Y')}"
+        subject = f"PDC Reminder: {len(b['cheques'])} cheque(s) need attention — {today.strftime('%d/%m/%Y')}"
         if dry:
             results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": False})
             continue
@@ -1468,7 +1480,7 @@ def export():
                    deposited_date, deposit_bank, deposit_reference,
                    cleared_date, bounce_date, bounce_reason, cheque_location,
                    sales_name, sales_email, location, plant, bh_name,
-                   TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD-Mon-YYYY HH24:MI')
+                   TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI')
             FROM cheques
             ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
             """
@@ -1509,6 +1521,8 @@ def export():
             c = ws.cell(row=ri, column=ci, value=val if val is not None else "")
             c.border = border
             c.alignment = Alignment(vertical="center")
+            if isinstance(val, (date, datetime)):
+                c.number_format = "DD/MM/YYYY"   # company date format
             if shade:
                 c.fill = shade
 

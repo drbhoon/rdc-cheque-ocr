@@ -143,9 +143,9 @@
       <tbody>
         {% for r in rows %}
         <tr>
-          <td>{{ r.cheque_date_iso or '—' }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
-          <td>{{ r.expiry_date or '—' }}</td>
-          <td>{{ r.deposit_due_date or '—' }}</td>
+          <td>{{ r.cheque_date_iso|dmy }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
+          <td>{{ r.expiry_date|dmy }}</td>
+          <td>{{ r.deposit_due_date|dmy }}</td>
           <td>{{ r.bank_name or '—' }}<div class="muted">{{ r.account_number or '' }}</div></td>
           <td>{{ r.cheque_number or '—' }}</td>
           <td>{{ r.issuer_name or '—' }}</td>

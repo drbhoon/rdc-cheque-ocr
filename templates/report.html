@@ -95,7 +95,7 @@
     <div class="topbar">
       <h1>📋 Cheque Clearing Report</h1>
       <div class="links">
-        <span class="today">Today: {{ today }}</span>
+        <span class="today">Today: {{ today_dmy }}</span>
         <a href="/">＋ Scan</a>
         <a href="/dashboard">📊 Dashboard</a>
         {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
@@ -121,7 +121,7 @@
         <tbody>
           {% for r in rows %}
           <tr>
-            <td>{{ r.deposit_due_date or '—' }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
+            <td>{{ r.deposit_due_date|dmy }}{% if r.stale %}<span class="stale-tag">STALE</span>{% endif %}</td>
             <td>{{ r.bank_name or '—' }}<div class="muted">{{ r.account_number or '' }}</div></td>
             <td>{{ r.cheque_number or '—' }}</td>
             <td>{{ r.payee or '—' }}</td>
