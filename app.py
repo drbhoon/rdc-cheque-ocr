@@ -250,7 +250,7 @@ def build_source(img_bytes, media_type):
 def read_cheque(img_bytes, media_type="image/jpeg"):
     message = get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=700,
+        max_tokens=1024,
         messages=[
             {
                 "role": "user",
@@ -261,10 +261,19 @@ def read_cheque(img_bytes, media_type="image/jpeg"):
             }
         ],
     )
-    raw = message.content[0].text.strip()
+    # Concatenate every text block (a PDF response may not put text in block 0)
+    raw = "".join(getattr(b, "text", "") for b in message.content
+                  if getattr(b, "type", None) == "text").strip()
     raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\n?```$", "", raw, flags=re.MULTILINE)
-    return json.loads(raw.strip())
+    raw = re.sub(r"\n?```$", "", raw, flags=re.MULTILINE).strip()
+    # Pull out the JSON object even if the model added stray text around it
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        raw = m.group(0)
+    if not raw:
+        raise ValueError("The model returned no readable text for this file. "
+                         "Try a clearer scan, or a JPG/PNG photo instead of the PDF.")
+    return json.loads(raw)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -544,8 +553,9 @@ def predict():
     try:
         data = read_cheque(img_bytes, media_type)
         return jsonify({"cheque": data})
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"Could not parse cheque data: {e}"}), 500
+    except (json.JSONDecodeError, ValueError):
+        return jsonify({"error": "Could not read this file. Please upload a clear photo "
+                                 "(JPG/PNG) or a single-page PDF of the cheque and try again."}), 422
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
@@ -854,17 +864,18 @@ def report():
     expired, due_soon, upcoming, undated, bounced, legal = [], [], [], [], [], []
     for r in rows:
         cd = r["cheque_date_iso"]
+        # expired = 90-day bank validity lapsed (can no longer be banked)
         r["stale"] = bool(cd and (today - cd).days > 90)
         if r["status"] == "BOUNCED":
             bounced.append(r); continue
         if r["status"] == "LEGAL":
             legal.append(r); continue
-        due = r["deposit_due_date"]          # PENDING cheques bucket by due date
+        if r["stale"]:                       # PENDING + validity lapsed
+            expired.append(r); continue
+        due = r["deposit_due_date"]          # still-valid PENDING bucket by due date
         if due is None:
             undated.append(r)
-        elif due < today:
-            expired.append(r)
-        elif due <= soon:
+        elif due <= soon:                    # due (or overdue) within 7 days — bank now/soon
             due_soon.append(r)
         else:
             upcoming.append(r)
@@ -873,8 +884,8 @@ def report():
         return sum(x["amount_value"] or 0 for x in group)
 
     groups = [
-        ("Expired Cheques (not deposited by due date)", "overdue", expired),
-        ("Due within 7 days", "soon", due_soon),
+        ("Expired Cheques (90-day validity lapsed)", "overdue", expired),
+        ("Due / overdue within 7 days", "soon", due_soon),
         ("Upcoming", "upcoming", upcoming),
         ("Bounced — awaiting action", "overdue", bounced),
         ("Legal cases", "upcoming", legal),
@@ -930,22 +941,29 @@ def dashboard():
     REDEP_EXISTS = ("EXISTS (SELECT 1 FROM cheque_events e "
                     "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
 
+    # "Expired" = the 90-day bank validity has lapsed (can no longer be banked).
+    today_m90 = today - timedelta(days=90)
+    EXPIRED_SQL = "status = 'PENDING' AND cheque_date_iso IS NOT NULL AND cheque_date_iso < %s"
+    NOT_EXPIRED = "(cheque_date_iso IS NULL OR cheque_date_iso >= %s)"
+
     # status / derived filters
-    status_map = {"pending": "PENDING", "bounced": "BOUNCED",
-                  "cleared": "CLEARED", "legal": "LEGAL", "rtgs": "RTGS_SETTLED",
-                  "closed": "CLOSED", "security": "SECURITY"}
+    status_map = {"bounced": "BOUNCED", "cleared": "CLEARED", "legal": "LEGAL",
+                  "rtgs": "RTGS_SETTLED", "closed": "CLOSED", "security": "SECURITY"}
     if f_status in status_map:
         where.append("status = %s")
         params.append(status_map[f_status])
+    elif f_status == "pending":
+        # still-valid pending only — validity-lapsed ones live in the Expired bucket
+        where.append(f"status = 'PENDING' AND {NOT_EXPIRED}")
+        params.append(today_m90)
     elif f_status == "deposited":
         # first-time deposits only — re-deposited ones live in their own bucket
         where.append(f"status = 'DEPOSITED' AND NOT {REDEP_EXISTS}")
     elif f_status == "redeposited":
         where.append(f"status = 'DEPOSITED' AND {REDEP_EXISTS}")
     elif f_status == "expired":
-        # PENDING cheques never deposited by their due date
-        where.append("status = 'PENDING' AND deposit_due_date < %s")
-        params.append(today)
+        where.append(EXPIRED_SQL)
+        params.append(today_m90)
 
     if q:
         where.append("(payee ILIKE %s OR account_number ILIKE %s OR cheque_number ILIKE %s "
@@ -998,11 +1016,16 @@ def dashboard():
         if "DEPOSITED" in summary:
             summary["DEPOSITED"] = {"count": summary["DEPOSITED"]["count"] - rc,
                                     "amount": summary["DEPOSITED"]["amount"] - float(ra)}
-        # Derived expired count: PENDING never deposited by due date
+        # Derived expired count: PENDING whose 90-day validity has lapsed
         cur.execute("SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
-                    "WHERE status = 'PENDING' AND deposit_due_date < %s", (today,))
+                    "WHERE status = 'PENDING' AND cheque_date_iso IS NOT NULL AND cheque_date_iso < %s",
+                    (today_m90,))
         oc, oa = cur.fetchone()
         summary["EXPIRED"] = {"count": oc, "amount": float(oa)}
+        # Keep Pending and Expired mutually exclusive (Expired is a subset of PENDING)
+        if "PENDING" in summary:
+            summary["PENDING"] = {"count": summary["PENDING"]["count"] - oc,
+                                  "amount": summary["PENDING"]["amount"] - float(oa)}
 
         # Filter dropdown options
         cur.execute("SELECT DISTINCT sales_name FROM cheques WHERE sales_name IS NOT NULL ORDER BY 1")

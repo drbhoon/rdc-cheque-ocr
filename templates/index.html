@@ -290,12 +290,15 @@
       html += `<label class="security-row"><input type="checkbox" id="f-is_security" />
         <span><b>Security cheque</b> — held as collateral, no date / no tracking</span></label>`;
 
-      // Dates
+      // Dates — DD/MM/YYYY text inputs (native date pickers follow OS locale, can't force DD/MM/YYYY)
+      const dmyVal = isoToDmy(isoVal);
       html += `<div class="two-col" id="dateBlock">
-        <div class="field-row"><div class="field-label">Cheque Date</div>
-          <input class="field-input" id="f-cheque_date_iso" type="date" value="${escAttr(isoVal)}" /></div>
-        <div class="field-row"><div class="field-label">Deposit-Due Date</div>
-          <input class="field-input" id="f-deposit_due_date" type="date" value="${escAttr(isoVal)}" /></div>
+        <div class="field-row"><div class="field-label">Cheque Date (DD/MM/YYYY)</div>
+          <input class="field-input" id="f-cheque_date_iso" type="text" inputmode="numeric"
+            placeholder="DD/MM/YYYY" maxlength="10" value="${escAttr(dmyVal)}" /></div>
+        <div class="field-row"><div class="field-label">Deposit-Due Date (DD/MM/YYYY)</div>
+          <input class="field-input" id="f-deposit_due_date" type="text" inputmode="numeric"
+            placeholder="DD/MM/YYYY" maxlength="10" value="${escAttr(dmyVal)}" /></div>
       </div>`;
       html += `<div id="dateWarn"></div>`;
       html += `<div id="matchBadge"></div>`;
@@ -354,10 +357,25 @@
       updateBadge();
     }
 
+    function isoToDmy(iso){ if(!iso) return ''; const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(iso); return m?`${m[3]}/${m[2]}/${m[1]}`:iso; }
+    function dmyToIso(s){
+      if(!s) return null;
+      const m=/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/.exec(String(s).trim());
+      if(!m) return null;
+      let d=m[1], mo=m[2], y=m[3];
+      if(y.length===2) y='20'+y;
+      d=d.padStart(2,'0'); mo=mo.padStart(2,'0');
+      if(+d<1||+d>31||+mo<1||+mo>12) return null;
+      return `${y}-${mo}-${d}`;
+    }
+
     function checkDate(){
       const w=$('dateWarn'); if(!w) return;
-      const v=$('f-cheque_date_iso')?.value; if(!v){ w.innerHTML=''; return; }
-      const d=new Date(v+'T00:00:00'), today=new Date(); today.setHours(0,0,0,0);
+      const raw=$('f-cheque_date_iso')?.value;
+      if(!raw){ w.innerHTML=''; return; }
+      const iso=dmyToIso(raw);
+      if(!iso){ w.innerHTML=`<span class="match-badge warn">⚠ Enter the date as DD/MM/YYYY</span>`; return; }
+      const d=new Date(iso+'T00:00:00'), today=new Date(); today.setHours(0,0,0,0);
       const days=Math.round((today-d)/86400000);
       if(days>90){
         w.innerHTML=`<span class="match-badge warn">⚠ Cheque date is ${days} days old — expired / likely misread. Please verify against the cheque.</span>`;
@@ -392,10 +410,19 @@
       const payload={};
       CHEQUE_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
       const sec = $('f-is_security')?.checked || false;
-      payload.is_security      = sec;
-      payload.cheque_date_iso  = sec ? null : ($('f-cheque_date_iso')?.value||null);
-      payload.deposit_due_date = sec ? null : ($('f-deposit_due_date')?.value||null);
-      payload.date             = sec ? null : (cheque.date || $('f-cheque_date_iso')?.value || null);
+      payload.is_security = sec;
+      if(sec){
+        payload.cheque_date_iso=null; payload.deposit_due_date=null; payload.date=null;
+      } else {
+        const cdRaw=$('f-cheque_date_iso')?.value?.trim()||'';
+        const ddRaw=$('f-deposit_due_date')?.value?.trim()||'';
+        const cdIso=dmyToIso(cdRaw), ddIso=dmyToIso(ddRaw);
+        if(cdRaw && !cdIso){ showToast('⚠ Cheque Date must be DD/MM/YYYY',true); return; }
+        if(ddRaw && !ddIso){ showToast('⚠ Deposit-Due Date must be DD/MM/YYYY',true); return; }
+        payload.cheque_date_iso  = cdIso;
+        payload.deposit_due_date = ddIso || cdIso;
+        payload.date             = cdRaw || cheque.date || null;
+      }
       payload.cheque_location  = $('f-cheque_location')?.value||'Customer';
       payload.sales_name = $('f-sales_name')?.value||null;
       STAFF_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
