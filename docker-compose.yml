@@ -33,9 +33,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # No host port mapping: 3001 is used by the app, and the app reaches the DB
-    # over the internal compose network at host "rdc-postgres-db". To use a DB
-    # admin tool from the host, add e.g.  ports: ["5432:5432"]  on a free port.
+    # Host 3002 -> container 5432 (for DB admin tools like pgAdmin from the host).
+    # The app itself does NOT use this; it reaches the DB over the internal
+    # compose network at host "rdc-postgres-db:5432".
+    ports:
+      - "3002:5432"
 
 volumes:
   postgres_data:
