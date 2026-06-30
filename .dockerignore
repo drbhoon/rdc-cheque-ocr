@@ -1,0 +1,21 @@
+# Keep the build context small and never bake secrets/cruft into the image
+.git
+.gitignore
+.env
+.env.example
+.dockerignore
+Dockerfile
+docker-compose.yml
+__pycache__/
+*.pyc
+*.pyo
+*.log
+server.log
+uploads/
+venv/
+.venv/
+*.xlsx
+*.jpeg
+*.jpg
+*.png
+*.pdf

@@ -1,0 +1,41 @@
+services:
+  # ── Flask application ──────────────────────────────────────────────────────
+  rdc-cheque-ocr-service:
+    build: .
+    image: rdc-cheque-ocr:prod
+    container_name: rdc-cheque-ocr-service
+    restart: unless-stopped
+    # All config (API keys, DB URL, SMTP, …) comes from .env
+    env_file:
+      - .env
+    # Host 3001  ->  container 8000 (the port Gunicorn listens on)
+    ports:
+      - "3001:8000"
+    # Don't start the app until Postgres is accepting connections, so the
+    # app's first-run table creation succeeds.
+    depends_on:
+      rdc-postgres-db:
+        condition: service_healthy
+
+  # ── PostgreSQL (local, persistent) ─────────────────────────────────────────
+  rdc-postgres-db:
+    image: postgres:15-alpine
+    container_name: rdc-postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No host port mapping: 3001 is used by the app, and the app reaches the DB
+    # over the internal compose network at host "rdc-postgres-db". To use a DB
+    # admin tool from the host, add e.g.  ports: ["5432:5432"]  on a free port.
+
+volumes:
+  postgres_data:
