@@ -8,9 +8,9 @@ services:
     # All config (API keys, DB URL, SMTP, …) comes from .env
     env_file:
       - .env
-    # Host 3001  ->  container 8000 (the port Gunicorn listens on)
+    # Host 3001 -> container 3001 (Gunicorn binds 3001; host and container ports match)
     ports:
-      - "3001:8000"
+      - "3001:3001"
     # Don't start the app until Postgres is accepting connections, so the
     # app's first-run table creation succeeds.
     depends_on:
@@ -28,16 +28,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # Postgres listens on 3002 inside the container so host and container ports match
+    # (5432 is taken by another app on the server).
+    command: -p 3002
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -p 3002 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
-    # Host 3002 -> container 5432 (for DB admin tools like pgAdmin from the host).
-    # The app itself does NOT use this; it reaches the DB over the internal
-    # compose network at host "rdc-postgres-db:5432".
+    # Host 3002 -> container 3002 (for DB admin tools like pgAdmin from the host).
+    # The app reaches the DB over the internal compose network at
+    # "rdc-postgres-db:3002" (see DATABASE_URL in .env).
     ports:
-      - "3002:5432"
+      - "3002:3002"
 
 volumes:
   postgres_data:

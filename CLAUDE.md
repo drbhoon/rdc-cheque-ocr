@@ -78,14 +78,12 @@ cheque_number) partial index → 409 on re-save.
 `SMTP_FROM`(noreply@rdc.in), `HO_REMINDER_EMAIL`(creditcontrol.ho@rdc.in), `CRON_SECRET`.
 Docker/prod additionally: `POSTGRES_USER/PASSWORD/DB` (see `.env.example`; `.env` gitignored).
 
-## ⚠ PENDING TASK (prod branch)
-Backend team wants container ports to EQUAL host ports (8000/5432 clash with other apps
-on the server): app must listen on **3001** and Postgres on **3002** inside containers.
-Status: Dockerfile locally edited to bind gunicorn 0.0.0.0:3001 (UNCOMMITTED);
-docker-compose.yml still `3001:8000` and Postgres internal 5432 (host 3002).
-To finish: compose → app `3001:3001`, db `3002:3002` with `command: -p 3002` and
-healthcheck `-p 3002`; `.env.example` DATABASE_URL host `rdc-postgres-db:3002`;
-commit + push to `prod`.
+## Prod ports (prod branch)
+Container ports EQUAL host ports (8000/5432 clash with other apps on the server):
+app listens on **3001** (Dockerfile EXPOSE + gunicorn bind), Postgres on **3002**
+(compose `command: -p 3002`, healthcheck `-p 3002`, ports `3002:3002`), and
+DATABASE_URL uses host `rdc-postgres-db:3002`. Backend team redeploys with
+`docker compose up -d --build` after updating their `.env` DATABASE_URL port.
 
 ## Testing users (test phase)
 Login ksbhoon@rdc.in exists as HO_ADMIN. Staff manual:

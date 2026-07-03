@@ -17,13 +17,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code (app.py, templates/, …)
 COPY . .
 
-# Internal container port the app listens on
-EXPOSE 8000
+# Internal container port the app listens on (matches the published host port)
+EXPOSE 3001
 
 # Gunicorn: 2 workers x 4 threads, 120s timeout (Claude OCR can take a few seconds).
 # The app creates/migrates its own Postgres tables on startup.
 CMD ["gunicorn", "app:app", \
-     "--bind", "0.0.0.0:8000", \
+     "--bind", "0.0.0.0:3001", \
      "--workers", "2", \
      "--threads", "4", \
      "--timeout", "120", \
