@@ -116,6 +116,9 @@ def init_db():
             ("close_reason",      "TEXT"),
             ("last_reminder_at",  "TIMESTAMPTZ"),
             ("created_by",        "TEXT"),
+            # HRIS / ERP linkage
+            ("emp_code",          "TEXT"),   # uploader's employee code (from staff_master)
+            ("cust_code",         "TEXT"),   # optional ERP customer code
         ]
         for name, ddl in cheque_cols:
             cur.execute(f"ALTER TABLE cheques ADD COLUMN IF NOT EXISTS {name} {ddl}")
@@ -140,6 +143,10 @@ def init_db():
                 updated_at     TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # One row per employee: EMP_CODE (HRIS) + ROLE (SALES/ACCOUNTS/BH/HO).
+        # Routing columns (location/plant/accounts_email/bh_*) only apply to SALES rows.
+        cur.execute("ALTER TABLE staff_master ADD COLUMN IF NOT EXISTS emp_code TEXT")
+        cur.execute("ALTER TABLE staff_master ADD COLUMN IF NOT EXISTS role TEXT")
 
         # Event / audit trail (deposit lifecycle, re-deposits)
         cur.execute("""
@@ -527,7 +534,10 @@ def users_update(uid):
 @app.route("/")
 @role_required(*UPLOAD_ROLES)
 def index():
-    return render_template("index.html")
+    u = current_user() or {}
+    return render_template("index.html",
+                           uploader_emp_code=emp_code_for(u.get("email")),
+                           uploader_email=u.get("email"))
 
 
 @app.route("/predict", methods=["POST"])
@@ -563,8 +573,29 @@ def predict():
 
 # ── Routes: staff master ─────────────────────────────────────────────────────
 
-STAFF_FIELDS = ["sales_name", "sales_email", "location", "plant",
+STAFF_FIELDS = ["sales_name", "emp_code", "role", "sales_email", "location", "plant",
                 "accounts_email", "bh_name", "bh_email"]
+
+
+def emp_code_for(email):
+    """EMP_CODE for a login email. Uploaders must exist in staff_master (any role)
+    with a non-blank EMP_CODE — otherwise they cannot save cheques."""
+    if not email:
+        return None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT TRIM(emp_code) FROM staff_master "
+            "WHERE LOWER(TRIM(sales_email)) = LOWER(TRIM(%s)) "
+            "AND COALESCE(TRIM(emp_code), '') <> '' LIMIT 1",
+            (email,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 @app.route("/staff")
@@ -635,9 +666,11 @@ def staff_upload():
             cur.execute(
                 """
                 INSERT INTO staff_master
-                    (sales_name, sales_email, location, plant, accounts_email, bh_name, bh_email, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s, NOW())
+                    (sales_name, emp_code, role, sales_email, location, plant,
+                     accounts_email, bh_name, bh_email, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
                 ON CONFLICT (sales_name) DO UPDATE SET
+                    emp_code=EXCLUDED.emp_code, role=EXCLUDED.role,
                     sales_email=EXCLUDED.sales_email, location=EXCLUDED.location,
                     plant=EXCLUDED.plant, accounts_email=EXCLUDED.accounts_email,
                     bh_name=EXCLUDED.bh_name, bh_email=EXCLUDED.bh_email, updated_at=NOW()
@@ -655,7 +688,8 @@ def staff_upload():
         conn.close()
 
 
-STAFF_EDITABLE = ["sales_email", "location", "plant", "accounts_email", "bh_name", "bh_email"]
+STAFF_EDITABLE = ["emp_code", "role", "sales_email", "location", "plant",
+                  "accounts_email", "bh_name", "bh_email"]
 
 
 @app.route("/staff/update", methods=["POST"])
@@ -732,6 +766,17 @@ def accept():
     if not data:
         return jsonify({"error": "No data received"}), 400
 
+    # HRIS gate: the uploader must exist in the Staff Master with an EMP_CODE.
+    uploader = current_user() or {}
+    emp_code = emp_code_for(uploader.get("email"))
+    if not emp_code:
+        return jsonify({
+            "error": "no_emp_code",
+            "message": "Your login is not linked to an Employee Code in the Staff Master. "
+                       "Ask HO Admin to add you (with your EMP_CODE) before scanning cheques.",
+        }), 403
+    cust_code = (data.get("cust_code") or "").strip() or None
+
     account_number = (data.get("account_number") or "").strip() or None
     cheque_number  = (data.get("cheque_number") or "").strip() or None
 
@@ -768,8 +813,9 @@ def accept():
                 (bank_name, account_number, cheque_number, cheque_date, cheque_date_iso,
                  deposit_due_date, payee, amount_words, amount_numbers, amount_value,
                  issuer_name, status, sales_name, sales_email, location, plant,
-                 accounts_email, bh_name, bh_email, cheque_location, created_by, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                 accounts_email, bh_name, bh_email, cheque_location, created_by,
+                 emp_code, cust_code, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
             RETURNING id
             """,
             (
@@ -780,6 +826,7 @@ def accept():
                 data.get("sales_name"), data.get("sales_email"), data.get("location"),
                 data.get("plant"), data.get("accounts_email"), data.get("bh_name"),
                 data.get("bh_email"), data.get("cheque_location") or "Customer", created_by,
+                emp_code, cust_code,
             ),
         )
         new_id = cur.fetchone()[0]
@@ -825,6 +872,39 @@ def set_location(cid):
         conn.commit()
         cur.close()
         return jsonify({"success": True, "cheque_location": loc})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/cheque/<int:cid>/custcode", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def set_cust_code(cid):
+    """Add / correct the optional ERP customer code after save (audited)."""
+    d = request.get_json(silent=True) or {}
+    new = (d.get("cust_code") or "").strip() or None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT cust_code FROM cheques WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        old = row[0]
+        if (old or None) != new:
+            cur.execute("UPDATE cheques SET cust_code=%s, updated_at=NOW() WHERE id=%s", (new, cid))
+            cur.execute(
+                "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                "old_value, new_value, reason, changed_by) "
+                "VALUES ('cheque', %s, 'cust_code', %s, %s, 'ERP customer code update', %s)",
+                (str(cid), old, new, (current_user() or {}).get("email")),
+            )
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "cust_code": new})
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -902,7 +982,7 @@ DASH_COLS = [
     "id", "bank_name", "account_number", "cheque_number", "payee", "issuer_name",
     "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
     "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
-    "deposited_date", "cleared_date",
+    "deposited_date", "cleared_date", "emp_code", "cust_code",
 ]
 
 # Filter token -> human label (order shown in the UI)
@@ -1555,6 +1635,7 @@ def export():
                    deposited_date, deposit_bank, deposit_reference,
                    cleared_date, bounce_date, bounce_reason, cheque_location,
                    sales_name, sales_email, location, plant, bh_name,
+                   emp_code, cust_code,
                    TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI')
             FROM cheques
             ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
@@ -1575,7 +1656,8 @@ def export():
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
         "Cleared On", "Bounced On", "Bounce Reason", "Cheque Location",
-        "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
+        "Sales Name", "Sales Email", "Location", "Plant", "BH Name",
+        "Emp Code (uploader)", "Cust Code (ERP)", "Scanned At (IST)",
     ]
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
@@ -1602,7 +1684,7 @@ def export():
                 c.fill = shade
 
     widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 11,
-              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 20]
+              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 12, 13, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"

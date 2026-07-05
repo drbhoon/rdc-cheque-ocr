@@ -57,7 +57,10 @@
     {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
   <div class="card">
     <h1>👥 Staff Master</h1>
-    <div class="sub">Upload the staff template. Selecting a sales person on the scan screen will auto-fill their details.</div>
+    <div class="sub">One row per employee (Sales, Accounts, BH, HO) with their HRIS EMP_CODE and ROLE.
+      Only ROLE=SALES rows appear in the scan screen's Sales Person dropdown; routing columns
+      (location/plant/accounts email/BH) apply to sales rows. <b>Nobody can save cheques unless
+      their login email is here with an EMP_CODE.</b></div>
 
     <div class="count">Currently loaded: <b>{{ count }}</b> staff record(s)</div>
 
@@ -75,7 +78,8 @@
     <div class="cols">
       Expected columns (header row, any order):
       <div>
-        <code>SALES_NAME</code><code>SALES_EMAIL</code><code>LOCATION</code><code>PLANT</code>
+        <code>SALES_NAME</code><code>EMP_CODE</code><code>ROLE</code><code>SALES_EMAIL</code>
+        <code>LOCATION</code><code>PLANT</code>
         <code>ACCOUNTS_EMAIL</code><code>BH_NAME</code><code>BH_EMAIL</code>
       </div>
     </div>
@@ -87,13 +91,15 @@
     <div class="tablewrap">
     <table class="staff-table">
       <thead><tr>
-        <th>Sales Name</th><th>Sales Email</th><th>Location</th><th>Plant</th>
+        <th>Name</th><th>Emp Code</th><th>Role</th><th>Email</th><th>Location</th><th>Plant</th>
         <th>Accounts Email</th><th>BH Name</th><th>BH Email</th><th>Actions</th>
       </tr></thead>
       <tbody>
         {% for s in staff %}
         <tr data-name="{{ s.sales_name }}">
           <td class="namecell">{{ s.sales_name }}</td>
+          <td><input data-f="emp_code"       value="{{ s.emp_code or '' }}" /></td>
+          <td><input data-f="role"           value="{{ s.role or '' }}" /></td>
           <td><input data-f="sales_email"    value="{{ s.sales_email or '' }}" /></td>
           <td><input data-f="location"       value="{{ s.location or '' }}" /></td>
           <td><input data-f="plant"          value="{{ s.plant or '' }}" /></td>

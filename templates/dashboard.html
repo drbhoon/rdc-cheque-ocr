@@ -151,7 +151,13 @@
           <td>{{ r.deposit_due_date|dmy }}</td>
           <td>{{ r.bank_name or '—' }}<div class="muted">{{ r.account_number or '' }}</div></td>
           <td>{{ r.cheque_number or '—' }}</td>
-          <td>{{ r.issuer_name or '—' }}</td>
+          <td>{{ r.issuer_name or '—' }}
+            <div class="muted">Cust: <span id="cc-{{ r.id }}">{{ r.cust_code or '—' }}</span>
+              {% if user and user.role in ('HO_ADMIN','ACCOUNTS') %}
+              <a href="#" data-id="{{ r.id }}" data-cc="{{ r.cust_code or '' }}" title="Set ERP customer code"
+                 onclick="editCustCode(this.dataset.id, this.dataset.cc); return false;">✎</a>
+              {% endif %}
+            </div></td>
           <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
           <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
           <td>{{ r.cheque_location or '—' }}</td>
@@ -216,6 +222,21 @@
     const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
 
     function setStatus(token){ document.getElementById('f-status').value = token; document.getElementById('filterForm').submit(); }
+
+    async function editCustCode(id, cur){
+      const v = prompt('ERP Customer Code (leave blank to clear):', cur || '');
+      if(v === null) return;
+      try{
+        const res = await fetch(`/cheque/${id}/custcode`, { method:'POST',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cust_code: v }) });
+        const d = await res.json();
+        if(d.success){
+          const el = document.getElementById('cc-'+id);
+          if(el) el.textContent = d.cust_code || '—';
+          showToast('✓ Customer code saved');
+        } else showToast('⚠ ' + (d.error || 'Failed to save'), true);
+      }catch{ showToast('⚠ Network error', true); }
+    }
 
     async function deleteCheque(id, label){
       if(!confirm('Delete '+(label||'this cheque')+'? This permanently removes the entry and its history.')) return;

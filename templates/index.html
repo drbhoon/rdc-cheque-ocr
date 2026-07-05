@@ -168,6 +168,17 @@
       </div>
     </div>
 
+    {% if uploader_emp_code %}
+    <div style="margin:10px 0 14px;padding:8px 12px;border-radius:8px;background:#0d2818;border:1px solid #1d5c38;color:#7ee2a8;font-size:13px;">
+      👤 {{ uploader_email }} · Employee Code: <b>{{ uploader_emp_code }}</b>
+    </div>
+    {% else %}
+    <div style="margin:10px 0 14px;padding:10px 12px;border-radius:8px;background:#2b1214;border:1px solid #7a2e33;color:#f3a6ab;font-size:13px;">
+      ⚠ Your login (<b>{{ uploader_email }}</b>) is not linked to an <b>Employee Code</b> in the
+      Staff Master. You cannot save cheques until HO Admin adds you (with your EMP_CODE).
+    </div>
+    {% endif %}
+
     <div class="drop-zone" id="dropZone">
       <input type="file" id="fileInput" accept="image/*,application/pdf" />
       <div class="drop-icon">📄</div>
@@ -210,6 +221,7 @@
       resultBody=$('resultBody'), acceptBtn=$('acceptBtn'), toast=$('toast');
 
     let selectedFile=null, cheque={}, staff=[];
+    const UPLOADER_EMP_CODE = {{ (uploader_emp_code or '')|tojson }};
 
     // OCR + manual cheque fields
     const CHEQUE_FIELDS = [
@@ -315,12 +327,23 @@
       html += `<div class="section-title">Responsible Staff</div>`;
       html += `<div class="field-row"><div class="field-label">Sales Person</div>
         <select class="field-select" id="f-sales_name"><option value="">— Select —</option>`;
-      staff.forEach(s=> html += `<option value="${escAttr(s.sales_name)}">${esc(s.sales_name)}</option>`);
+      // Only SALES-role staff belong in this dropdown (blank role = legacy sales row)
+      staff.filter(s=>!s.role||String(s.role).trim().toUpperCase()==='SALES')
+        .forEach(s=> html += `<option value="${escAttr(s.sales_name)}">${esc(s.sales_name)}</option>`);
       html += `</select></div>`;
       STAFF_FIELDS.forEach(f=>{
         html += `<div class="field-row"><div class="field-label">${esc(f.label)}</div>
           <input class="field-input" id="f-${f.key}" type="text" value="" placeholder="auto-filled from staff master" /></div>`;
       });
+
+      // HRIS / ERP codes
+      html += `<div class="section-title">Codes (HRIS / ERP)</div>`;
+      html += `<div class="field-row"><div class="field-label">Your Employee Code</div>
+        <input class="field-input" id="f-emp_code" type="text" value="${escAttr(UPLOADER_EMP_CODE)}"
+          readonly style="opacity:.75;" placeholder="not linked — contact HO Admin" /></div>`;
+      html += `<div class="field-row"><div class="field-label">Customer Code (ERP — optional)</div>
+        <input class="field-input" id="f-cust_code" type="text" value=""
+          placeholder="enter ERP customer code or leave blank" /></div>`;
 
       resultBody.innerHTML = html;
 
@@ -407,6 +430,10 @@
     }
 
     acceptBtn.addEventListener('click', async ()=>{
+      if(!UPLOADER_EMP_CODE){
+        showToast('⚠ You are not linked to an Employee Code in the Staff Master — ask HO Admin to add you.',true);
+        return;
+      }
       const payload={};
       CHEQUE_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
       const sec = $('f-is_security')?.checked || false;
@@ -426,12 +453,15 @@
       payload.cheque_location  = $('f-cheque_location')?.value||'Customer';
       payload.sales_name = $('f-sales_name')?.value||null;
       STAFF_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
+      payload.cust_code = $('f-cust_code')?.value?.trim()||null;
 
       acceptBtn.disabled=true; acceptBtn.innerHTML='<span class="spinner"></span>Saving…';
       try{
         const res=await fetch('/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await res.json();
         if(res.status===409){ showToast('⚠ '+(data.message||'Duplicate cheque — already recorded.'),true);
+          acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }
+        if(res.status===403){ showToast('⚠ '+(data.message||'Not permitted.'),true);
           acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }
         if(data.success){ showToast('✓ Saved! Ready for next cheque.',false); resetAll(); }
         else { showToast('⚠ Save failed: '+(data.error||'Unknown'),true);
