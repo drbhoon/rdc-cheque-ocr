@@ -62,9 +62,17 @@
       <div style="font-size:13px;color:#9ca3af;">
         Create logins for everyone in the Staff Master who has none yet
         (password <b>Welcome@123</b>, must be changed at first login). HO admins are not
-        included — add them below with their own strong passwords.
+        included — add them below with their own strong passwords. Safe to press:
+        existing logins and passwords are never touched.
       </div>
-      <button class="btn" onclick="bulkLogins()">Create logins from Staff Master</button>
+      {% if bulk_pending %}
+      <button class="btn" onclick="bulkLogins({{ bulk_pending }})">
+        Create logins — {{ bulk_pending }} staff without one</button>
+      {% else %}
+      <button class="btn" disabled
+        style="opacity:.35;cursor:not-allowed;"
+        title="Everyone in the Staff Master already has a login">✓ All staff have logins</button>
+      {% endif %}
     </div>
 
     <table>
@@ -133,8 +141,8 @@
       else toast('⚠ '+(data.error||'Failed'), true);
     }
 
-    async function bulkLogins(){
-      if(!confirm('Create logins (password Welcome@123, forced change at first login) for all Staff Master employees without one?')) return;
+    async function bulkLogins(n){
+      if(!confirm(`Create ${n} login(s) with password Welcome@123 (forced change at first login)? Existing accounts are not touched.`)) return;
       const {ok,data}=await post('/users/bulk-logins',{});
       if(ok&&data.success){ toast(`✓ ${data.created} login(s) created`); setTimeout(()=>location.reload(),1000); }
       else toast('⚠ '+(data.error||'Failed'), true);
