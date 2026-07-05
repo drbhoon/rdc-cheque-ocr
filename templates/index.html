@@ -376,10 +376,12 @@
       $('f-sales_name').addEventListener('change', e=>{
         const s=staff.find(x=>x.emp_name===e.target.value)||{};
         const norm=v=>String(v||'').trim().toLowerCase();
+        // ACCOUNTS/BH may cover several locations (comma-separated LOCATION)
+        const locList=x=>String(x.location||'').split(/[,;|]/).map(v=>v.trim().toLowerCase()).filter(Boolean);
         const byRole=(roles)=>{
           if(!norm(s.location)) return {};
           return staff.filter(x=>roles.includes(String(x.role||'').trim().toUpperCase()))
-                      .find(x=>norm(x.location)===norm(s.location)) || {};
+                      .find(x=>locList(x).includes(norm(s.location))) || {};
         };
         const acc=byRole(['ACCOUNTS']), bh=byRole(['BH','RM']);
         $('f-sales_email').value    = s.email||'';

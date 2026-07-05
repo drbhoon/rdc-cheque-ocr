@@ -708,32 +708,43 @@ def staff_upload():
             saved += 1
         conn.commit()
 
-        # Pairing audit — every location that has SALES people needs exactly one
-        # ACCOUNTS + one BH/RM there (cheques are routed to that location's pair).
-        cur.execute("""
-            SELECT COALESCE(TRIM(location), '') AS loc,
-                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) = 'SALES')          AS n_sales,
-                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) = 'ACCOUNTS')       AS n_acc,
-                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) IN ('BH','RM'))     AS n_bh
-            FROM employees
-            GROUP BY COALESCE(TRIM(location), '')
-        """)
-        for loc, n_sales, n_acc, n_bh in cur.fetchall():
-            if not n_sales:
-                continue
-            if not loc:
-                skipped.append(f"{n_sales} SALES employee(s) have no LOCATION — "
-                               "their cheques cannot be auto-routed")
-                continue
-            if n_acc == 0:
-                skipped.append(f"location '{loc}': SALES present but no ACCOUNTS person")
-            elif n_acc > 1:
-                skipped.append(f"location '{loc}': {n_acc} ACCOUNTS people — first by name is used")
-            if n_bh == 0:
-                skipped.append(f"location '{loc}': SALES present but no BH/RM")
-            elif n_bh > 1:
-                skipped.append(f"location '{loc}': {n_bh} BH/RM — first by name is used")
+        # Pairing audit — every location that has SALES people needs its ACCOUNTS
+        # + BH/RM pair. ACCOUNTS/BH rows may cover several locations, listed
+        # comma-separated in their LOCATION cell.
+        import re as _re
+        from collections import Counter
+
+        def _locs(v):
+            return [p.strip().lower() for p in _re.split(r"[,;|]", v or "") if p.strip()]
+
+        cur.execute("SELECT role, location FROM employees")
+        sales_locs, acc_ct, bh_ct = set(), Counter(), Counter()
+        no_loc_sales = 0
+        for role, locv in cur.fetchall():
+            rl = (role or "").strip().upper()
+            if rl == "SALES":
+                ls = _locs(locv)
+                if not ls:
+                    no_loc_sales += 1
+                else:
+                    sales_locs.update(ls)
+            elif rl == "ACCOUNTS":
+                acc_ct.update(_locs(locv))
+            elif rl in ("BH", "RM"):
+                bh_ct.update(_locs(locv))
         cur.close()
+        if no_loc_sales:
+            skipped.append(f"{no_loc_sales} SALES employee(s) have no LOCATION — "
+                           "their cheques cannot be auto-routed")
+        for loc in sorted(sales_locs):
+            if acc_ct[loc] == 0:
+                skipped.append(f"location '{loc}': SALES present but no ACCOUNTS person")
+            elif acc_ct[loc] > 1:
+                skipped.append(f"location '{loc}': {acc_ct[loc]} ACCOUNTS people — first by name is used")
+            if bh_ct[loc] == 0:
+                skipped.append(f"location '{loc}': SALES present but no BH/RM")
+            elif bh_ct[loc] > 1:
+                skipped.append(f"location '{loc}': {bh_ct[loc]} BH/RM — first by name is used")
 
         out = {"success": True, "saved": saved}
         if skipped:
