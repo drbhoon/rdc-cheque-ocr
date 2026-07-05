@@ -56,7 +56,8 @@
     {% if user and user.role == 'HO_ADMIN' %}<a href="/users">👤 Users</a>{% endif %}
     {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
   <div class="card">
-    <h1>👥 Staff Master</h1>
+    <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+      style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />👥 Staff Master</h1>
     <div class="sub">One row per employee, keyed by HRIS <b>EMP_CODE</b>. <b>ROLE decides what the
       person can do in the app</b> (SALES = scan &amp; save · ACCOUNTS = scan + status updates ·
       BH/RM = view only · HO = admin) and drives auto-assignment: each LOCATION has its

@@ -86,7 +86,8 @@
 <body>
   <div class="wrap">
     <div class="topbar">
-      <h1>📊 Cheque Dashboard</h1>
+      <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+        style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />📊 Cheque Dashboard</h1>
       <div class="links">
         {% if user and user.role in ['HO_ADMIN','ACCOUNTS','SALES'] %}<a href="/">＋ Scan</a>{% endif %}
         <a href="/report">📋 Action List</a>

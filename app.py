@@ -1817,7 +1817,6 @@ def export():
                    deposited_date, deposit_bank, deposit_reference,
                    cleared_date, bounce_date, bounce_reason, cheque_location,
                    sales_name, sales_email, location, plant, bh_name,
-                   emp_code, cust_code,
                    TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI')
             FROM cheques
             ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
@@ -1838,8 +1837,7 @@ def export():
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
         "Cleared On", "Bounced On", "Bounce Reason", "Cheque Location",
-        "Sales Name", "Sales Email", "Location", "Plant", "BH Name",
-        "Emp Code (uploader)", "Cust Code (ERP)", "Scanned At (IST)",
+        "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
     ]
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
@@ -1866,7 +1864,7 @@ def export():
                 c.fill = shade
 
     widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 11,
-              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 12, 13, 20]
+              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
