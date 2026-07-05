@@ -116,6 +116,9 @@ def init_db():
             ("close_reason",      "TEXT"),
             ("last_reminder_at",  "TIMESTAMPTZ"),
             ("created_by",        "TEXT"),
+            # HRIS / ERP linkage
+            ("emp_code",          "TEXT"),   # uploader's employee code (from staff_master)
+            ("cust_code",         "TEXT"),   # optional ERP customer code
         ]
         for name, ddl in cheque_cols:
             cur.execute(f"ALTER TABLE cheques ADD COLUMN IF NOT EXISTS {name} {ddl}")
@@ -138,6 +141,21 @@ def init_db():
                 bh_name        TEXT,
                 bh_email       TEXT,
                 updated_at     TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        # Employee master — one row per employee, keyed by HRIS EMP_CODE.
+        # ROLE drives app authority at login AND cheque routing (the ACCOUNTS/BH
+        # person at the sales person's plant/location is assigned automatically).
+        # Replaces the old sales-centric staff_master (kept in the DB, unused).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS employees (
+                emp_code   TEXT PRIMARY KEY,
+                emp_name   TEXT,
+                role       TEXT,
+                email      TEXT,
+                location   TEXT,
+                plant      TEXT,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
 
@@ -169,6 +187,9 @@ def init_db():
                 created_at    TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Bulk-provisioned logins must set their own password at first login
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                    "must_change_password BOOLEAN NOT NULL DEFAULT FALSE")
 
         # Change / edit log (freeze overrides, staff-master edits, user changes)
         cur.execute("""
@@ -399,7 +420,8 @@ def login():
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT email, name, password_hash, role, active FROM users WHERE email=%s",
+            "SELECT email, name, password_hash, role, active, must_change_password "
+            "FROM users WHERE email=%s",
             (email,),
         )
         row = cur.fetchone()
@@ -410,9 +432,70 @@ def login():
     if not row or not row[4] or not check_password_hash(row[2], password):
         return render_template("login.html", error="Invalid email or password."), 401
 
-    session["user"] = {"email": row[0], "name": row[1], "role": row[3]}
-    nxt = request.args.get("next") or url_for(landing_for(row[3]))
+    # Authority comes from the employee master ROLE when this email is listed
+    # there; the users-table role is only the fallback (e.g. the seeded HO Admin).
+    emp = employee_for(row[0])
+    eff_role = EMP_ROLE_MAP.get(str((emp or {}).get("role") or "").strip().upper(), row[3])
+    session["user"] = {"email": row[0], "name": row[1], "role": eff_role,
+                       "pwreset": bool(row[5])}
+    if row[5]:
+        return redirect(url_for("password_change"))
+    nxt = request.args.get("next") or url_for(landing_for(eff_role))
     return redirect(nxt)
+
+
+@app.before_request
+def _force_password_change():
+    """Users provisioned with the default password can do nothing else until
+    they set their own."""
+    u = session.get("user")
+    if u and u.get("pwreset") and request.endpoint not in (
+            "password_change", "logout", "login", "static"):
+        return redirect(url_for("password_change"))
+
+
+@app.route("/password", methods=["GET", "POST"])
+@login_required
+def password_change():
+    u = current_user()
+    forced = bool(u.get("pwreset"))
+    if request.method == "GET":
+        return render_template("password.html", forced=forced)
+
+    current = request.form.get("current") or ""
+    new     = request.form.get("new") or ""
+    confirm = request.form.get("confirm") or ""
+
+    def fail(msg, code=400):
+        return render_template("password.html", forced=forced, error=msg), code
+
+    if len(new) < 8:
+        return fail("New password must be at least 8 characters.")
+    if new != confirm:
+        return fail("New password and confirmation do not match.")
+    if new == DEFAULT_PASSWORD:
+        return fail("Please choose a password different from the default one.")
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT password_hash FROM users WHERE email=%s", (u["email"],))
+        row = cur.fetchone()
+        if not row or not check_password_hash(row[0], current):
+            cur.close()
+            return fail("Current password is incorrect.", 401)
+        cur.execute(
+            "UPDATE users SET password_hash=%s, must_change_password=FALSE WHERE email=%s",
+            (generate_password_hash(new), u["email"]),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    session["user"]["pwreset"] = False
+    session.modified = True
+    return redirect(url_for(landing_for(u["role"])))
 
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -424,6 +507,52 @@ def logout():
 # ── Routes: user management (HO Admin only) ───────────────────────────────────
 
 USER_COLS = ["id", "email", "name", "role", "active", "created_at"]
+
+# Initial password for bulk-provisioned logins — forced change at first login.
+DEFAULT_PASSWORD = "Welcome@123"
+
+
+@app.route("/users/bulk-logins", methods=["POST"])
+@role_required("HO_ADMIN")
+def users_bulk_logins():
+    """Create logins for everyone in the employee master who has none yet,
+    with the default password and a forced change at first login. HO rows are
+    skipped — admin accounts are created individually with strong passwords."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT emp_name, role, email FROM employees "
+                    "WHERE COALESCE(TRIM(email), '') <> ''")
+        emps = cur.fetchall()
+        cur.execute("SELECT LOWER(email) FROM users")
+        have = {r[0] for r in cur.fetchall()}
+        # One shared hash: the default password is public anyway, and hashing
+        # per-user would make bulk creation take ~10s+.
+        pw_hash = generate_password_hash(DEFAULT_PASSWORD)
+        created = 0
+        for name, role, email in emps:
+            app_role = EMP_ROLE_MAP.get((role or "").strip().upper())
+            if app_role is None or app_role == "HO_ADMIN":
+                continue
+            em = email.strip().lower()
+            if not em or "@" not in em or em in have:
+                continue
+            cur.execute(
+                "INSERT INTO users (email, name, password_hash, role, must_change_password) "
+                "VALUES (%s,%s,%s,%s,TRUE)",
+                (em, name, pw_hash, app_role),
+            )
+            have.add(em)
+            created += 1
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "created": created,
+                        "default_password": DEFAULT_PASSWORD})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/users", methods=["GET"])
@@ -509,8 +638,11 @@ def users_update(uid):
             if len(d["password"]) < 6:
                 cur.close()
                 return jsonify({"error": "Password must be at least 6 characters"}), 400
-            cur.execute("UPDATE users SET password_hash=%s WHERE id=%s",
-                        (generate_password_hash(d["password"]), uid))
+            # Admin-set passwords are temporary: the user must pick their own
+            # at next login (unless the admin is changing their own password).
+            force = email != me["email"]
+            cur.execute("UPDATE users SET password_hash=%s, must_change_password=%s WHERE id=%s",
+                        (generate_password_hash(d["password"]), force, uid))
             log_change("USER", uid, "password", "***", "***")
         conn.commit()
         cur.close()
@@ -527,7 +659,10 @@ def users_update(uid):
 @app.route("/")
 @role_required(*UPLOAD_ROLES)
 def index():
-    return render_template("index.html")
+    u = current_user() or {}
+    return render_template("index.html",
+                           uploader_emp_code=emp_code_for(u.get("email")),
+                           uploader_email=u.get("email"))
 
 
 @app.route("/predict", methods=["POST"])
@@ -563,8 +698,78 @@ def predict():
 
 # ── Routes: staff master ─────────────────────────────────────────────────────
 
-STAFF_FIELDS = ["sales_name", "sales_email", "location", "plant",
-                "accounts_email", "bh_name", "bh_email"]
+EMPLOYEE_FIELDS = ["emp_code", "emp_name", "role", "email", "location", "plant"]
+
+# Employee-master ROLE → app authority (used for the session role at login).
+# BH/RM are read-only; HO gets admin. Unknown roles are rejected at upload.
+EMP_ROLE_MAP = {"SALES": "SALES", "ACCOUNTS": "ACCOUNTS", "BH": "VIEWER", "RM": "VIEWER",
+                "HO": "HO_ADMIN", "ADMIN": "HO_ADMIN", "HO_ADMIN": "HO_ADMIN",
+                "VIEWER": "VIEWER"}
+
+
+def employee_for(email):
+    """Employee-master row for a login email (None if not listed)."""
+    if not email:
+        return None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees "
+            "WHERE LOWER(TRIM(email)) = LOWER(TRIM(%s)) LIMIT 1", (email,))
+        row = cur.fetchone()
+        cur.close()
+        return dict(zip(EMPLOYEE_FIELDS, row)) if row else None
+    finally:
+        conn.close()
+
+
+def emp_code_for(email):
+    """EMP_CODE for a login email — uploaders must be in the employee master."""
+    code = ((employee_for(email) or {}).get("emp_code") or "").strip()
+    return code or None
+
+
+def pairing_warnings(cur):
+    """Locations whose ACCOUNTS+BH pair is broken — every location with SALES
+    people needs one of each. ACCOUNTS/BH rows may cover several locations,
+    listed comma-separated in their LOCATION cell."""
+    import re as _re
+    from collections import Counter
+
+    def _locs(v):
+        return [p.strip().lower() for p in _re.split(r"[,;|]", v or "") if p.strip()]
+
+    cur.execute("SELECT role, location FROM employees")
+    sales_locs, acc_ct, bh_ct = set(), Counter(), Counter()
+    no_loc_sales = 0
+    for role, locv in cur.fetchall():
+        rl = (role or "").strip().upper()
+        if rl == "SALES":
+            ls = _locs(locv)
+            if not ls:
+                no_loc_sales += 1
+            else:
+                sales_locs.update(ls)
+        elif rl == "ACCOUNTS":
+            acc_ct.update(_locs(locv))
+        elif rl in ("BH", "RM"):
+            bh_ct.update(_locs(locv))
+
+    warnings = []
+    if no_loc_sales:
+        warnings.append(f"{no_loc_sales} SALES employee(s) have no LOCATION — "
+                        "their cheques cannot be auto-routed")
+    for loc in sorted(sales_locs):
+        if acc_ct[loc] == 0:
+            warnings.append(f"location '{loc}': SALES present but no ACCOUNTS person")
+        elif acc_ct[loc] > 1:
+            warnings.append(f"location '{loc}': {acc_ct[loc]} ACCOUNTS people — first by name is used")
+        if bh_ct[loc] == 0:
+            warnings.append(f"location '{loc}': SALES present but no BH/RM")
+        elif bh_ct[loc] > 1:
+            warnings.append(f"location '{loc}': {bh_ct[loc]} BH/RM — first by name is used")
+    return warnings
 
 
 @app.route("/staff")
@@ -573,12 +778,12 @@ def staff_list():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {', '.join(STAFF_FIELDS)} FROM staff_master ORDER BY sales_name")
+        cur.execute(f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees ORDER BY emp_name")
         rows = cur.fetchall()
         cur.close()
     finally:
         conn.close()
-    return jsonify([dict(zip(STAFF_FIELDS, r)) for r in rows])
+    return jsonify([dict(zip(EMPLOYEE_FIELDS, r)) for r in rows])
 
 
 @app.route("/staff/upload", methods=["GET", "POST"])
@@ -588,12 +793,14 @@ def staff_upload():
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute(f"SELECT {', '.join(STAFF_FIELDS)} FROM staff_master ORDER BY sales_name")
-            staff = [dict(zip(STAFF_FIELDS, r)) for r in cur.fetchall()]
+            cur.execute(f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees ORDER BY emp_name")
+            staff = [dict(zip(EMPLOYEE_FIELDS, r)) for r in cur.fetchall()]
+            audit = pairing_warnings(cur)
             cur.close()
         finally:
             conn.close()
-        return render_template("staff.html", count=len(staff), staff=staff, fields=STAFF_FIELDS)
+        return render_template("staff.html", count=len(staff), staff=staff,
+                               fields=EMPLOYEE_FIELDS, audit=audit)
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":
@@ -616,38 +823,51 @@ def staff_upload():
     # Map header → column index (case-insensitive, by expected names)
     header = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
     try:
-        idx = {f: header.index(f) for f in STAFF_FIELDS}
+        idx = {f: header.index(f) for f in EMPLOYEE_FIELDS}
     except ValueError:
         return jsonify({
-            "error": "Header row must contain columns: " + ", ".join(STAFF_FIELDS)
+            "error": "Header row must contain columns: "
+                     + ", ".join(f.upper() for f in EMPLOYEE_FIELDS)
         }), 400
 
     conn = get_db()
-    saved = 0
+    saved, skipped = 0, []
     try:
         cur = conn.cursor()
-        for r in rows[1:]:
-            name = r[idx["sales_name"]] if idx["sales_name"] < len(r) else None
-            if not name or str(name).strip() == "":
+        for rn, r in enumerate(rows[1:], start=2):
+            def cell(f):
+                v = r[idx[f]] if idx[f] < len(r) else None
+                return str(v).strip() if v is not None else ""
+            code = cell("emp_code")
+            if not code:
+                continue  # blank row
+            role = cell("role").upper()
+            if role not in EMP_ROLE_MAP:
+                skipped.append(f"row {rn} ({code}): unknown ROLE '{cell('role')}' — "
+                               f"use one of SALES, ACCOUNTS, BH, RM, HO, VIEWER")
                 continue
-            vals = [str(r[idx[f]]).strip() if idx[f] < len(r) and r[idx[f]] is not None else None
-                    for f in STAFF_FIELDS]
             cur.execute(
                 """
-                INSERT INTO staff_master
-                    (sales_name, sales_email, location, plant, accounts_email, bh_name, bh_email, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s, NOW())
-                ON CONFLICT (sales_name) DO UPDATE SET
-                    sales_email=EXCLUDED.sales_email, location=EXCLUDED.location,
-                    plant=EXCLUDED.plant, accounts_email=EXCLUDED.accounts_email,
-                    bh_name=EXCLUDED.bh_name, bh_email=EXCLUDED.bh_email, updated_at=NOW()
+                INSERT INTO employees
+                    (emp_code, emp_name, role, email, location, plant, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s, NOW())
+                ON CONFLICT (emp_code) DO UPDATE SET
+                    emp_name=EXCLUDED.emp_name, role=EXCLUDED.role,
+                    email=EXCLUDED.email, location=EXCLUDED.location,
+                    plant=EXCLUDED.plant, updated_at=NOW()
                 """,
-                vals,
+                (code, cell("emp_name") or None, role, cell("email") or None,
+                 cell("location") or None, cell("plant") or None),
             )
             saved += 1
         conn.commit()
+        skipped += pairing_warnings(cur)
         cur.close()
-        return jsonify({"success": True, "saved": saved})
+
+        out = {"success": True, "saved": saved}
+        if skipped:
+            out["warnings"] = skipped
+        return jsonify(out)
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -655,25 +875,29 @@ def staff_upload():
         conn.close()
 
 
-STAFF_EDITABLE = ["sales_email", "location", "plant", "accounts_email", "bh_name", "bh_email"]
+STAFF_EDITABLE = ["emp_name", "role", "email", "location", "plant"]
 
 
 @app.route("/staff/update", methods=["POST"])
 @role_required("HO_ADMIN")
 def staff_update():
-    """Edit one staff record's fields (keyed by sales_name); log each change."""
+    """Edit one employee's fields (keyed by emp_code); log each change."""
     d = request.get_json(silent=True) or {}
-    name = (d.get("sales_name") or "").strip()
-    if not name:
-        return jsonify({"error": "sales_name is required"}), 400
+    code = (d.get("emp_code") or "").strip()
+    if not code:
+        return jsonify({"error": "emp_code is required"}), 400
+    if "role" in d and d["role"]:
+        d["role"] = str(d["role"]).strip().upper()
+        if d["role"] not in EMP_ROLE_MAP:
+            return jsonify({"error": "ROLE must be one of SALES, ACCOUNTS, BH, RM, HO, VIEWER"}), 400
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {', '.join(STAFF_EDITABLE)} FROM staff_master WHERE sales_name=%s", (name,))
+        cur.execute(f"SELECT {', '.join(STAFF_EDITABLE)} FROM employees WHERE emp_code=%s", (code,))
         row = cur.fetchone()
         if not row:
             cur.close()
-            return jsonify({"error": "Staff not found"}), 404
+            return jsonify({"error": "Employee not found"}), 404
         old = dict(zip(STAFF_EDITABLE, row))
         sets, vals, changes = [], [], []
         for f in STAFF_EDITABLE:
@@ -685,12 +909,12 @@ def staff_update():
         if not sets:
             cur.close()
             return jsonify({"success": True, "unchanged": True})
-        vals.append(name)
-        cur.execute(f"UPDATE staff_master SET {', '.join(sets)}, updated_at=NOW() WHERE sales_name=%s", vals)
+        vals.append(code)
+        cur.execute(f"UPDATE employees SET {', '.join(sets)}, updated_at=NOW() WHERE emp_code=%s", vals)
         conn.commit()
         cur.close()
         for f, o, n in changes:
-            log_change("STAFF", name, f, o, n)
+            log_change("STAFF", code, f, o, n)
         return jsonify({"success": True})
     except Exception as e:
         conn.rollback()
@@ -703,18 +927,18 @@ def staff_update():
 @role_required("HO_ADMIN")
 def staff_delete():
     d = request.get_json(silent=True) or {}
-    name = (d.get("sales_name") or "").strip()
-    if not name:
-        return jsonify({"error": "sales_name is required"}), 400
+    code = (d.get("emp_code") or "").strip()
+    if not code:
+        return jsonify({"error": "emp_code is required"}), 400
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM staff_master WHERE sales_name=%s", (name,))
+        cur.execute("DELETE FROM employees WHERE emp_code=%s", (code,))
         deleted = cur.rowcount
         conn.commit()
         cur.close()
         if deleted:
-            log_change("STAFF", name, "delete", name, None)
+            log_change("STAFF", code, "delete", code, None)
         return jsonify({"success": bool(deleted)})
     except Exception as e:
         conn.rollback()
@@ -731,6 +955,17 @@ def accept():
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "No data received"}), 400
+
+    # HRIS gate: the uploader must exist in the Staff Master with an EMP_CODE.
+    uploader = current_user() or {}
+    emp_code = emp_code_for(uploader.get("email"))
+    if not emp_code:
+        return jsonify({
+            "error": "no_emp_code",
+            "message": "Your login is not linked to an Employee Code in the Staff Master. "
+                       "Ask HO Admin to add you (with your EMP_CODE) before scanning cheques.",
+        }), 403
+    cust_code = (data.get("cust_code") or "").strip() or None
 
     account_number = (data.get("account_number") or "").strip() or None
     cheque_number  = (data.get("cheque_number") or "").strip() or None
@@ -768,8 +1003,9 @@ def accept():
                 (bank_name, account_number, cheque_number, cheque_date, cheque_date_iso,
                  deposit_due_date, payee, amount_words, amount_numbers, amount_value,
                  issuer_name, status, sales_name, sales_email, location, plant,
-                 accounts_email, bh_name, bh_email, cheque_location, created_by, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                 accounts_email, bh_name, bh_email, cheque_location, created_by,
+                 emp_code, cust_code, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
             RETURNING id
             """,
             (
@@ -780,6 +1016,7 @@ def accept():
                 data.get("sales_name"), data.get("sales_email"), data.get("location"),
                 data.get("plant"), data.get("accounts_email"), data.get("bh_name"),
                 data.get("bh_email"), data.get("cheque_location") or "Customer", created_by,
+                emp_code, cust_code,
             ),
         )
         new_id = cur.fetchone()[0]
@@ -825,6 +1062,39 @@ def set_location(cid):
         conn.commit()
         cur.close()
         return jsonify({"success": True, "cheque_location": loc})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/cheque/<int:cid>/custcode", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def set_cust_code(cid):
+    """Add / correct the optional ERP customer code after save (audited)."""
+    d = request.get_json(silent=True) or {}
+    new = (d.get("cust_code") or "").strip() or None
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT cust_code FROM cheques WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        old = row[0]
+        if (old or None) != new:
+            cur.execute("UPDATE cheques SET cust_code=%s, updated_at=NOW() WHERE id=%s", (new, cid))
+            cur.execute(
+                "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                "old_value, new_value, reason, changed_by) "
+                "VALUES ('cheque', %s, 'cust_code', %s, %s, 'ERP customer code update', %s)",
+                (str(cid), old, new, (current_user() or {}).get("email")),
+            )
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "cust_code": new})
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -902,7 +1172,7 @@ DASH_COLS = [
     "id", "bank_name", "account_number", "cheque_number", "payee", "issuer_name",
     "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
     "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
-    "deposited_date", "cleared_date",
+    "deposited_date", "cleared_date", "emp_code", "cust_code",
 ]
 
 # Filter token -> human label (order shown in the UI)

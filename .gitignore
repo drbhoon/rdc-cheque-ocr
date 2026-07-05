@@ -7,3 +7,6 @@ venv/
 uploads/
 *.onnx
 gunicorn_config.py
+
+# Local test data - never commit
+User Test Data -ignore/
