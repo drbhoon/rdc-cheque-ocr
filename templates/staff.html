@@ -59,8 +59,8 @@
     <h1>👥 Staff Master</h1>
     <div class="sub">One row per employee, keyed by HRIS <b>EMP_CODE</b>. <b>ROLE decides what the
       person can do in the app</b> (SALES = scan &amp; save · ACCOUNTS = scan + status updates ·
-      BH/RM = view only · HO = admin) and drives auto-assignment: cheques are routed to the
-      ACCOUNTS person and BH at the sales person's plant/location.
+      BH/RM = view only · HO = admin) and drives auto-assignment: each LOCATION has its
+      ACCOUNTS + BH pair, and cheques are routed to the pair at the sales person's location.
       <b>Nobody can save cheques unless their login email is here.</b></div>
 
     <div class="count">Currently loaded: <b>{{ count }}</b> staff record(s)</div>

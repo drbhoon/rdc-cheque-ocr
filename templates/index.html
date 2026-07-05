@@ -371,15 +371,15 @@
         else checkDate();
       });
 
-      // Staff dropdown auto-fill — ROLE-driven routing: the ACCOUNTS person and
-      // BH at the sales person's plant (else location) are assigned automatically.
+      // Staff dropdown auto-fill — ROLE+LOCATION routing: every location has its
+      // ACCOUNTS + BH pair; the sales person's location selects that pair.
       $('f-sales_name').addEventListener('change', e=>{
         const s=staff.find(x=>x.emp_name===e.target.value)||{};
         const norm=v=>String(v||'').trim().toLowerCase();
         const byRole=(roles)=>{
-          const c=staff.filter(x=>roles.includes(String(x.role||'').trim().toUpperCase()));
-          return c.find(x=>norm(x.plant)&&norm(x.plant)===norm(s.plant))
-              || c.find(x=>norm(x.location)&&norm(x.location)===norm(s.location)) || {};
+          if(!norm(s.location)) return {};
+          return staff.filter(x=>roles.includes(String(x.role||'').trim().toUpperCase()))
+                      .find(x=>norm(x.location)===norm(s.location)) || {};
         };
         const acc=byRole(['ACCOUNTS']), bh=byRole(['BH','RM']);
         $('f-sales_email').value    = s.email||'';

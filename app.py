@@ -707,7 +707,34 @@ def staff_upload():
             )
             saved += 1
         conn.commit()
+
+        # Pairing audit — every location that has SALES people needs exactly one
+        # ACCOUNTS + one BH/RM there (cheques are routed to that location's pair).
+        cur.execute("""
+            SELECT COALESCE(TRIM(location), '') AS loc,
+                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) = 'SALES')          AS n_sales,
+                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) = 'ACCOUNTS')       AS n_acc,
+                   COUNT(*) FILTER (WHERE UPPER(TRIM(role)) IN ('BH','RM'))     AS n_bh
+            FROM employees
+            GROUP BY COALESCE(TRIM(location), '')
+        """)
+        for loc, n_sales, n_acc, n_bh in cur.fetchall():
+            if not n_sales:
+                continue
+            if not loc:
+                skipped.append(f"{n_sales} SALES employee(s) have no LOCATION — "
+                               "their cheques cannot be auto-routed")
+                continue
+            if n_acc == 0:
+                skipped.append(f"location '{loc}': SALES present but no ACCOUNTS person")
+            elif n_acc > 1:
+                skipped.append(f"location '{loc}': {n_acc} ACCOUNTS people — first by name is used")
+            if n_bh == 0:
+                skipped.append(f"location '{loc}': SALES present but no BH/RM")
+            elif n_bh > 1:
+                skipped.append(f"location '{loc}': {n_bh} BH/RM — first by name is used")
         cur.close()
+
         out = {"success": True, "saved": saved}
         if skipped:
             out["warnings"] = skipped
