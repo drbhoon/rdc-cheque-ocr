@@ -187,6 +187,9 @@ def init_db():
                 created_at    TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Bulk-provisioned logins must set their own password at first login
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                    "must_change_password BOOLEAN NOT NULL DEFAULT FALSE")
 
         # Change / edit log (freeze overrides, staff-master edits, user changes)
         cur.execute("""
@@ -417,7 +420,8 @@ def login():
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT email, name, password_hash, role, active FROM users WHERE email=%s",
+            "SELECT email, name, password_hash, role, active, must_change_password "
+            "FROM users WHERE email=%s",
             (email,),
         )
         row = cur.fetchone()
@@ -432,9 +436,66 @@ def login():
     # there; the users-table role is only the fallback (e.g. the seeded HO Admin).
     emp = employee_for(row[0])
     eff_role = EMP_ROLE_MAP.get(str((emp or {}).get("role") or "").strip().upper(), row[3])
-    session["user"] = {"email": row[0], "name": row[1], "role": eff_role}
+    session["user"] = {"email": row[0], "name": row[1], "role": eff_role,
+                       "pwreset": bool(row[5])}
+    if row[5]:
+        return redirect(url_for("password_change"))
     nxt = request.args.get("next") or url_for(landing_for(eff_role))
     return redirect(nxt)
+
+
+@app.before_request
+def _force_password_change():
+    """Users provisioned with the default password can do nothing else until
+    they set their own."""
+    u = session.get("user")
+    if u and u.get("pwreset") and request.endpoint not in (
+            "password_change", "logout", "login", "static"):
+        return redirect(url_for("password_change"))
+
+
+@app.route("/password", methods=["GET", "POST"])
+@login_required
+def password_change():
+    u = current_user()
+    forced = bool(u.get("pwreset"))
+    if request.method == "GET":
+        return render_template("password.html", forced=forced)
+
+    current = request.form.get("current") or ""
+    new     = request.form.get("new") or ""
+    confirm = request.form.get("confirm") or ""
+
+    def fail(msg, code=400):
+        return render_template("password.html", forced=forced, error=msg), code
+
+    if len(new) < 8:
+        return fail("New password must be at least 8 characters.")
+    if new != confirm:
+        return fail("New password and confirmation do not match.")
+    if new == DEFAULT_PASSWORD:
+        return fail("Please choose a password different from the default one.")
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT password_hash FROM users WHERE email=%s", (u["email"],))
+        row = cur.fetchone()
+        if not row or not check_password_hash(row[0], current):
+            cur.close()
+            return fail("Current password is incorrect.", 401)
+        cur.execute(
+            "UPDATE users SET password_hash=%s, must_change_password=FALSE WHERE email=%s",
+            (generate_password_hash(new), u["email"]),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    session["user"]["pwreset"] = False
+    session.modified = True
+    return redirect(url_for(landing_for(u["role"])))
 
 
 @app.route("/logout", methods=["GET", "POST"])
@@ -446,6 +507,52 @@ def logout():
 # ── Routes: user management (HO Admin only) ───────────────────────────────────
 
 USER_COLS = ["id", "email", "name", "role", "active", "created_at"]
+
+# Initial password for bulk-provisioned logins — forced change at first login.
+DEFAULT_PASSWORD = "Welcome@123"
+
+
+@app.route("/users/bulk-logins", methods=["POST"])
+@role_required("HO_ADMIN")
+def users_bulk_logins():
+    """Create logins for everyone in the employee master who has none yet,
+    with the default password and a forced change at first login. HO rows are
+    skipped — admin accounts are created individually with strong passwords."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT emp_name, role, email FROM employees "
+                    "WHERE COALESCE(TRIM(email), '') <> ''")
+        emps = cur.fetchall()
+        cur.execute("SELECT LOWER(email) FROM users")
+        have = {r[0] for r in cur.fetchall()}
+        # One shared hash: the default password is public anyway, and hashing
+        # per-user would make bulk creation take ~10s+.
+        pw_hash = generate_password_hash(DEFAULT_PASSWORD)
+        created = 0
+        for name, role, email in emps:
+            app_role = EMP_ROLE_MAP.get((role or "").strip().upper())
+            if app_role is None or app_role == "HO_ADMIN":
+                continue
+            em = email.strip().lower()
+            if not em or "@" not in em or em in have:
+                continue
+            cur.execute(
+                "INSERT INTO users (email, name, password_hash, role, must_change_password) "
+                "VALUES (%s,%s,%s,%s,TRUE)",
+                (em, name, pw_hash, app_role),
+            )
+            have.add(em)
+            created += 1
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "created": created,
+                        "default_password": DEFAULT_PASSWORD})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/users", methods=["GET"])
@@ -531,8 +638,11 @@ def users_update(uid):
             if len(d["password"]) < 6:
                 cur.close()
                 return jsonify({"error": "Password must be at least 6 characters"}), 400
-            cur.execute("UPDATE users SET password_hash=%s WHERE id=%s",
-                        (generate_password_hash(d["password"]), uid))
+            # Admin-set passwords are temporary: the user must pick their own
+            # at next login (unless the admin is changing their own password).
+            force = email != me["email"]
+            cur.execute("UPDATE users SET password_hash=%s, must_change_password=%s WHERE id=%s",
+                        (generate_password_hash(d["password"]), force, uid))
             log_change("USER", uid, "password", "***", "***")
         conn.commit()
         cur.close()

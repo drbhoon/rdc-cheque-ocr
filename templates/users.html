@@ -53,7 +53,18 @@
 
   <div class="card">
     <h1>👤 Users &amp; Access</h1>
-    <div class="sub">HO Admins manage logins and roles. Every change is recorded in the edit log.</div>
+    <div class="sub">HO Admins manage logins and roles. Every change is recorded in the edit log.<br/>
+      Roles are driven by the Staff Master at each login — the role here is only the fallback.</div>
+
+    <div style="margin-bottom:18px;padding:12px 14px;border:1px solid #2d3148;border-radius:10px;
+                display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="font-size:13px;color:#9ca3af;">
+        Create logins for everyone in the Staff Master who has none yet
+        (password <b>Welcome@123</b>, must be changed at first login). HO admins are not
+        included — add them below with their own strong passwords.
+      </div>
+      <button class="btn" onclick="bulkLogins()">Create logins from Staff Master</button>
+    </div>
 
     <table>
       <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
@@ -118,6 +129,13 @@
     async function updateUser(id, patch){
       const {ok,data}=await post('/users/'+id, patch);
       if(ok&&data.success){ toast('✓ Updated'); setTimeout(()=>location.reload(),700); }
+      else toast('⚠ '+(data.error||'Failed'), true);
+    }
+
+    async function bulkLogins(){
+      if(!confirm('Create logins (password Welcome@123, forced change at first login) for all Staff Master employees without one?')) return;
+      const {ok,data}=await post('/users/bulk-logins',{});
+      if(ok&&data.success){ toast(`✓ ${data.created} login(s) created`); setTimeout(()=>location.reload(),1000); }
       else toast('⚠ '+(data.error||'Failed'), true);
     }
 
