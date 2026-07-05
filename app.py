@@ -563,10 +563,20 @@ def users_page():
         cur = conn.cursor()
         cur.execute(f"SELECT {', '.join(USER_COLS)} FROM users ORDER BY role, email")
         rows = [dict(zip(USER_COLS, r)) for r in cur.fetchall()]
+        # How many staff-master people (non-HO, valid email) still have no login —
+        # drives the bulk-create button state (dimmed when zero).
+        cur.execute("""
+            SELECT COUNT(*) FROM employees e
+            WHERE COALESCE(TRIM(e.email), '') <> ''
+              AND POSITION('@' IN e.email) > 0
+              AND UPPER(TRIM(e.role)) IN ('SALES','ACCOUNTS','BH','RM','VIEWER')
+              AND LOWER(TRIM(e.email)) NOT IN (SELECT LOWER(email) FROM users)
+        """)
+        bulk_pending = cur.fetchone()[0]
         cur.close()
     finally:
         conn.close()
-    return render_template("users.html", users=rows, roles=ROLES)
+    return render_template("users.html", users=rows, roles=ROLES, bulk_pending=bulk_pending)
 
 
 @app.route("/users", methods=["POST"])
