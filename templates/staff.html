@@ -57,10 +57,11 @@
     {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
   <div class="card">
     <h1>👥 Staff Master</h1>
-    <div class="sub">One row per employee (Sales, Accounts, BH, HO) with their HRIS EMP_CODE and ROLE.
-      Only ROLE=SALES rows appear in the scan screen's Sales Person dropdown; routing columns
-      (location/plant/accounts email/BH) apply to sales rows. <b>Nobody can save cheques unless
-      their login email is here with an EMP_CODE.</b></div>
+    <div class="sub">One row per employee, keyed by HRIS <b>EMP_CODE</b>. <b>ROLE decides what the
+      person can do in the app</b> (SALES = scan &amp; save · ACCOUNTS = scan + status updates ·
+      BH/RM = view only · HO = admin) and drives auto-assignment: cheques are routed to the
+      ACCOUNTS person and BH at the sales person's plant/location.
+      <b>Nobody can save cheques unless their login email is here.</b></div>
 
     <div class="count">Currently loaded: <b>{{ count }}</b> staff record(s)</div>
 
@@ -78,10 +79,10 @@
     <div class="cols">
       Expected columns (header row, any order):
       <div>
-        <code>SALES_NAME</code><code>EMP_CODE</code><code>ROLE</code><code>SALES_EMAIL</code>
+        <code>EMP_CODE</code><code>EMP_NAME</code><code>ROLE</code><code>EMAIL</code>
         <code>LOCATION</code><code>PLANT</code>
-        <code>ACCOUNTS_EMAIL</code><code>BH_NAME</code><code>BH_EMAIL</code>
       </div>
+      ROLE must be one of: SALES · ACCOUNTS · BH · RM · HO · VIEWER
     </div>
   </div>
 
@@ -91,21 +92,18 @@
     <div class="tablewrap">
     <table class="staff-table">
       <thead><tr>
-        <th>Name</th><th>Emp Code</th><th>Role</th><th>Email</th><th>Location</th><th>Plant</th>
-        <th>Accounts Email</th><th>BH Name</th><th>BH Email</th><th>Actions</th>
+        <th>Emp Code</th><th>Name</th><th>Role</th><th>Email</th><th>Location</th><th>Plant</th>
+        <th>Actions</th>
       </tr></thead>
       <tbody>
         {% for s in staff %}
-        <tr data-name="{{ s.sales_name }}">
-          <td class="namecell">{{ s.sales_name }}</td>
-          <td><input data-f="emp_code"       value="{{ s.emp_code or '' }}" /></td>
-          <td><input data-f="role"           value="{{ s.role or '' }}" /></td>
-          <td><input data-f="sales_email"    value="{{ s.sales_email or '' }}" /></td>
-          <td><input data-f="location"       value="{{ s.location or '' }}" /></td>
-          <td><input data-f="plant"          value="{{ s.plant or '' }}" /></td>
-          <td><input data-f="accounts_email" value="{{ s.accounts_email or '' }}" /></td>
-          <td><input data-f="bh_name"        value="{{ s.bh_name or '' }}" /></td>
-          <td><input data-f="bh_email"       value="{{ s.bh_email or '' }}" /></td>
+        <tr data-code="{{ s.emp_code }}">
+          <td class="namecell">{{ s.emp_code }}</td>
+          <td><input data-f="emp_name" value="{{ s.emp_name or '' }}" /></td>
+          <td><input data-f="role"     value="{{ s.role or '' }}" /></td>
+          <td><input data-f="email"    value="{{ s.email or '' }}" /></td>
+          <td><input data-f="location" value="{{ s.location or '' }}" /></td>
+          <td><input data-f="plant"    value="{{ s.plant or '' }}" /></td>
           <td class="rowact">
             <button class="mini save" onclick="saveStaff(this)">Save</button>
             <button class="mini del" onclick="deleteStaff(this)">Delete</button>
@@ -131,8 +129,8 @@
       setTimeout(()=>t.classList.remove('show'),2200); }
 
     async function saveStaff(btn){
-      const tr = btn.closest('tr'); const name = tr.dataset.name;
-      const body = { sales_name: name };
+      const tr = btn.closest('tr'); const name = tr.dataset.code;
+      const body = { emp_code: name };
       tr.querySelectorAll('input[data-f]').forEach(i => body[i.dataset.f] = i.value);
       btn.disabled = true; btn.textContent = '…';
       try{
@@ -145,10 +143,10 @@
     }
 
     async function deleteStaff(btn){
-      const tr = btn.closest('tr'); const name = tr.dataset.name;
-      if(!confirm('Delete staff record "'+name+'"? This cannot be undone.')) return;
+      const tr = btn.closest('tr'); const name = tr.dataset.code;
+      if(!confirm('Delete employee "'+name+'"? This cannot be undone.')) return;
       try{
-        const res = await fetch('/staff/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({sales_name:name})});
+        const res = await fetch('/staff/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emp_code:name})});
         const data = await res.json();
         if(data.success){ stoast('✓ Deleted "'+name+'"'); tr.remove(); }
         else stoast('⚠ '+(data.error||'Failed'), true);
@@ -180,7 +178,13 @@
         const res=await fetch('/staff/upload',{method:'POST',body:fd});
         clearTimeout(timer);
         const data=await res.json();
-        if(data.success){ msg.className='msg ok'; msg.textContent=`✓ ${data.saved} staff record(s) loaded.`; setTimeout(()=>location.reload(),1200); }
+        if(data.success){
+          msg.className='msg ok';
+          let t = `✓ ${data.saved} employee(s) loaded.`;
+          if(data.warnings && data.warnings.length) t += ' ⚠ Skipped: ' + data.warnings.join(' · ');
+          msg.textContent = t;
+          setTimeout(()=>location.reload(), data.warnings && data.warnings.length ? 6000 : 1200);
+        }
         else { msg.className='msg err'; msg.textContent='⚠ '+(data.error||'Upload failed')+' — fix the file and upload again.'; resetForm(); }
       }catch{ clearTimeout(timer); msg.className='msg err'; msg.textContent='⚠ Network error — please try again.'; resetForm(); }
     });

@@ -327,9 +327,9 @@
       html += `<div class="section-title">Responsible Staff</div>`;
       html += `<div class="field-row"><div class="field-label">Sales Person</div>
         <select class="field-select" id="f-sales_name"><option value="">— Select —</option>`;
-      // Only SALES-role staff belong in this dropdown (blank role = legacy sales row)
-      staff.filter(s=>!s.role||String(s.role).trim().toUpperCase()==='SALES')
-        .forEach(s=> html += `<option value="${escAttr(s.sales_name)}">${esc(s.sales_name)}</option>`);
+      // Only SALES-role employees belong in this dropdown
+      staff.filter(s=>String(s.role||'').trim().toUpperCase()==='SALES')
+        .forEach(s=> html += `<option value="${escAttr(s.emp_name)}">${esc(s.emp_name)}</option>`);
       html += `</select></div>`;
       STAFF_FIELDS.forEach(f=>{
         html += `<div class="field-row"><div class="field-label">${esc(f.label)}</div>
@@ -371,10 +371,23 @@
         else checkDate();
       });
 
-      // Staff dropdown auto-fill
+      // Staff dropdown auto-fill — ROLE-driven routing: the ACCOUNTS person and
+      // BH at the sales person's plant (else location) are assigned automatically.
       $('f-sales_name').addEventListener('change', e=>{
-        const s=staff.find(x=>x.sales_name===e.target.value)||{};
-        STAFF_FIELDS.forEach(f=>{ $('f-'+f.key).value = s[f.key]||''; });
+        const s=staff.find(x=>x.emp_name===e.target.value)||{};
+        const norm=v=>String(v||'').trim().toLowerCase();
+        const byRole=(roles)=>{
+          const c=staff.filter(x=>roles.includes(String(x.role||'').trim().toUpperCase()));
+          return c.find(x=>norm(x.plant)&&norm(x.plant)===norm(s.plant))
+              || c.find(x=>norm(x.location)&&norm(x.location)===norm(s.location)) || {};
+        };
+        const acc=byRole(['ACCOUNTS']), bh=byRole(['BH','RM']);
+        $('f-sales_email').value    = s.email||'';
+        $('f-location').value       = s.location||'';
+        $('f-plant').value          = s.plant||'';
+        $('f-accounts_email').value = acc.email||'';
+        $('f-bh_name').value        = bh.emp_name||'';
+        $('f-bh_email').value       = bh.email||'';
       });
 
       updateBadge();

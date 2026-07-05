@@ -143,10 +143,21 @@ def init_db():
                 updated_at     TIMESTAMPTZ DEFAULT NOW()
             )
         """)
-        # One row per employee: EMP_CODE (HRIS) + ROLE (SALES/ACCOUNTS/BH/HO).
-        # Routing columns (location/plant/accounts_email/bh_*) only apply to SALES rows.
-        cur.execute("ALTER TABLE staff_master ADD COLUMN IF NOT EXISTS emp_code TEXT")
-        cur.execute("ALTER TABLE staff_master ADD COLUMN IF NOT EXISTS role TEXT")
+        # Employee master — one row per employee, keyed by HRIS EMP_CODE.
+        # ROLE drives app authority at login AND cheque routing (the ACCOUNTS/BH
+        # person at the sales person's plant/location is assigned automatically).
+        # Replaces the old sales-centric staff_master (kept in the DB, unused).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS employees (
+                emp_code   TEXT PRIMARY KEY,
+                emp_name   TEXT,
+                role       TEXT,
+                email      TEXT,
+                location   TEXT,
+                plant      TEXT,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
 
         # Event / audit trail (deposit lifecycle, re-deposits)
         cur.execute("""
@@ -417,8 +428,12 @@ def login():
     if not row or not row[4] or not check_password_hash(row[2], password):
         return render_template("login.html", error="Invalid email or password."), 401
 
-    session["user"] = {"email": row[0], "name": row[1], "role": row[3]}
-    nxt = request.args.get("next") or url_for(landing_for(row[3]))
+    # Authority comes from the employee master ROLE when this email is listed
+    # there; the users-table role is only the fallback (e.g. the seeded HO Admin).
+    emp = employee_for(row[0])
+    eff_role = EMP_ROLE_MAP.get(str((emp or {}).get("role") or "").strip().upper(), row[3])
+    session["user"] = {"email": row[0], "name": row[1], "role": eff_role}
+    nxt = request.args.get("next") or url_for(landing_for(eff_role))
     return redirect(nxt)
 
 
@@ -573,29 +588,36 @@ def predict():
 
 # ── Routes: staff master ─────────────────────────────────────────────────────
 
-STAFF_FIELDS = ["sales_name", "emp_code", "role", "sales_email", "location", "plant",
-                "accounts_email", "bh_name", "bh_email"]
+EMPLOYEE_FIELDS = ["emp_code", "emp_name", "role", "email", "location", "plant"]
+
+# Employee-master ROLE → app authority (used for the session role at login).
+# BH/RM are read-only; HO gets admin. Unknown roles are rejected at upload.
+EMP_ROLE_MAP = {"SALES": "SALES", "ACCOUNTS": "ACCOUNTS", "BH": "VIEWER", "RM": "VIEWER",
+                "HO": "HO_ADMIN", "ADMIN": "HO_ADMIN", "HO_ADMIN": "HO_ADMIN",
+                "VIEWER": "VIEWER"}
 
 
-def emp_code_for(email):
-    """EMP_CODE for a login email. Uploaders must exist in staff_master (any role)
-    with a non-blank EMP_CODE — otherwise they cannot save cheques."""
+def employee_for(email):
+    """Employee-master row for a login email (None if not listed)."""
     if not email:
         return None
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT TRIM(emp_code) FROM staff_master "
-            "WHERE LOWER(TRIM(sales_email)) = LOWER(TRIM(%s)) "
-            "AND COALESCE(TRIM(emp_code), '') <> '' LIMIT 1",
-            (email,),
-        )
+            f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees "
+            "WHERE LOWER(TRIM(email)) = LOWER(TRIM(%s)) LIMIT 1", (email,))
         row = cur.fetchone()
         cur.close()
-        return row[0] if row else None
+        return dict(zip(EMPLOYEE_FIELDS, row)) if row else None
     finally:
         conn.close()
+
+
+def emp_code_for(email):
+    """EMP_CODE for a login email — uploaders must be in the employee master."""
+    code = ((employee_for(email) or {}).get("emp_code") or "").strip()
+    return code or None
 
 
 @app.route("/staff")
@@ -604,12 +626,12 @@ def staff_list():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {', '.join(STAFF_FIELDS)} FROM staff_master ORDER BY sales_name")
+        cur.execute(f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees ORDER BY emp_name")
         rows = cur.fetchall()
         cur.close()
     finally:
         conn.close()
-    return jsonify([dict(zip(STAFF_FIELDS, r)) for r in rows])
+    return jsonify([dict(zip(EMPLOYEE_FIELDS, r)) for r in rows])
 
 
 @app.route("/staff/upload", methods=["GET", "POST"])
@@ -619,12 +641,12 @@ def staff_upload():
         conn = get_db()
         try:
             cur = conn.cursor()
-            cur.execute(f"SELECT {', '.join(STAFF_FIELDS)} FROM staff_master ORDER BY sales_name")
-            staff = [dict(zip(STAFF_FIELDS, r)) for r in cur.fetchall()]
+            cur.execute(f"SELECT {', '.join(EMPLOYEE_FIELDS)} FROM employees ORDER BY emp_name")
+            staff = [dict(zip(EMPLOYEE_FIELDS, r)) for r in cur.fetchall()]
             cur.close()
         finally:
             conn.close()
-        return render_template("staff.html", count=len(staff), staff=staff, fields=STAFF_FIELDS)
+        return render_template("staff.html", count=len(staff), staff=staff, fields=EMPLOYEE_FIELDS)
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":
@@ -647,40 +669,49 @@ def staff_upload():
     # Map header → column index (case-insensitive, by expected names)
     header = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
     try:
-        idx = {f: header.index(f) for f in STAFF_FIELDS}
+        idx = {f: header.index(f) for f in EMPLOYEE_FIELDS}
     except ValueError:
         return jsonify({
-            "error": "Header row must contain columns: " + ", ".join(STAFF_FIELDS)
+            "error": "Header row must contain columns: "
+                     + ", ".join(f.upper() for f in EMPLOYEE_FIELDS)
         }), 400
 
     conn = get_db()
-    saved = 0
+    saved, skipped = 0, []
     try:
         cur = conn.cursor()
-        for r in rows[1:]:
-            name = r[idx["sales_name"]] if idx["sales_name"] < len(r) else None
-            if not name or str(name).strip() == "":
+        for rn, r in enumerate(rows[1:], start=2):
+            def cell(f):
+                v = r[idx[f]] if idx[f] < len(r) else None
+                return str(v).strip() if v is not None else ""
+            code = cell("emp_code")
+            if not code:
+                continue  # blank row
+            role = cell("role").upper()
+            if role not in EMP_ROLE_MAP:
+                skipped.append(f"row {rn} ({code}): unknown ROLE '{cell('role')}' — "
+                               f"use one of SALES, ACCOUNTS, BH, RM, HO, VIEWER")
                 continue
-            vals = [str(r[idx[f]]).strip() if idx[f] < len(r) and r[idx[f]] is not None else None
-                    for f in STAFF_FIELDS]
             cur.execute(
                 """
-                INSERT INTO staff_master
-                    (sales_name, emp_code, role, sales_email, location, plant,
-                     accounts_email, bh_name, bh_email, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
-                ON CONFLICT (sales_name) DO UPDATE SET
-                    emp_code=EXCLUDED.emp_code, role=EXCLUDED.role,
-                    sales_email=EXCLUDED.sales_email, location=EXCLUDED.location,
-                    plant=EXCLUDED.plant, accounts_email=EXCLUDED.accounts_email,
-                    bh_name=EXCLUDED.bh_name, bh_email=EXCLUDED.bh_email, updated_at=NOW()
+                INSERT INTO employees
+                    (emp_code, emp_name, role, email, location, plant, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s, NOW())
+                ON CONFLICT (emp_code) DO UPDATE SET
+                    emp_name=EXCLUDED.emp_name, role=EXCLUDED.role,
+                    email=EXCLUDED.email, location=EXCLUDED.location,
+                    plant=EXCLUDED.plant, updated_at=NOW()
                 """,
-                vals,
+                (code, cell("emp_name") or None, role, cell("email") or None,
+                 cell("location") or None, cell("plant") or None),
             )
             saved += 1
         conn.commit()
         cur.close()
-        return jsonify({"success": True, "saved": saved})
+        out = {"success": True, "saved": saved}
+        if skipped:
+            out["warnings"] = skipped
+        return jsonify(out)
     except Exception as e:
         conn.rollback()
         return jsonify({"error": str(e)}), 500
@@ -688,26 +719,29 @@ def staff_upload():
         conn.close()
 
 
-STAFF_EDITABLE = ["emp_code", "role", "sales_email", "location", "plant",
-                  "accounts_email", "bh_name", "bh_email"]
+STAFF_EDITABLE = ["emp_name", "role", "email", "location", "plant"]
 
 
 @app.route("/staff/update", methods=["POST"])
 @role_required("HO_ADMIN")
 def staff_update():
-    """Edit one staff record's fields (keyed by sales_name); log each change."""
+    """Edit one employee's fields (keyed by emp_code); log each change."""
     d = request.get_json(silent=True) or {}
-    name = (d.get("sales_name") or "").strip()
-    if not name:
-        return jsonify({"error": "sales_name is required"}), 400
+    code = (d.get("emp_code") or "").strip()
+    if not code:
+        return jsonify({"error": "emp_code is required"}), 400
+    if "role" in d and d["role"]:
+        d["role"] = str(d["role"]).strip().upper()
+        if d["role"] not in EMP_ROLE_MAP:
+            return jsonify({"error": "ROLE must be one of SALES, ACCOUNTS, BH, RM, HO, VIEWER"}), 400
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {', '.join(STAFF_EDITABLE)} FROM staff_master WHERE sales_name=%s", (name,))
+        cur.execute(f"SELECT {', '.join(STAFF_EDITABLE)} FROM employees WHERE emp_code=%s", (code,))
         row = cur.fetchone()
         if not row:
             cur.close()
-            return jsonify({"error": "Staff not found"}), 404
+            return jsonify({"error": "Employee not found"}), 404
         old = dict(zip(STAFF_EDITABLE, row))
         sets, vals, changes = [], [], []
         for f in STAFF_EDITABLE:
@@ -719,12 +753,12 @@ def staff_update():
         if not sets:
             cur.close()
             return jsonify({"success": True, "unchanged": True})
-        vals.append(name)
-        cur.execute(f"UPDATE staff_master SET {', '.join(sets)}, updated_at=NOW() WHERE sales_name=%s", vals)
+        vals.append(code)
+        cur.execute(f"UPDATE employees SET {', '.join(sets)}, updated_at=NOW() WHERE emp_code=%s", vals)
         conn.commit()
         cur.close()
         for f, o, n in changes:
-            log_change("STAFF", name, f, o, n)
+            log_change("STAFF", code, f, o, n)
         return jsonify({"success": True})
     except Exception as e:
         conn.rollback()
@@ -737,18 +771,18 @@ def staff_update():
 @role_required("HO_ADMIN")
 def staff_delete():
     d = request.get_json(silent=True) or {}
-    name = (d.get("sales_name") or "").strip()
-    if not name:
-        return jsonify({"error": "sales_name is required"}), 400
+    code = (d.get("emp_code") or "").strip()
+    if not code:
+        return jsonify({"error": "emp_code is required"}), 400
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM staff_master WHERE sales_name=%s", (name,))
+        cur.execute("DELETE FROM employees WHERE emp_code=%s", (code,))
         deleted = cur.rowcount
         conn.commit()
         cur.close()
         if deleted:
-            log_change("STAFF", name, "delete", name, None)
+            log_change("STAFF", code, "delete", code, None)
         return jsonify({"success": bool(deleted)})
     except Exception as e:
         conn.rollback()
