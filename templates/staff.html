@@ -42,6 +42,9 @@
     .staff-table input { width: 100%; min-width: 110px; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 6px 8px; font-size: 12px; outline: none; }
     .staff-table input:focus { border-color: #4f6ef7; }
     .staff-table tr.dirty input { border-color: #3b4668; }
+    /* Rows are already saved by the upload — Save only appears once you edit one */
+    .staff-table .mini.save { display: none; }
+    .staff-table tr.dirty .mini.save { display: inline-block; border-color: #22c55e; color: #4ade80; }
     .rowact { white-space: nowrap; }
     .mini { border: 1px solid #2d3148; background: #0f1117; border-radius: 6px; padding: 5px 10px; font-size: 11.5px; cursor: pointer; margin-right: 4px; }
     .mini.save { color: #4ade80; } .mini.save:hover { border-color: #4ade80; }
@@ -87,6 +90,23 @@
       ACCOUNTS / BH covering several locations: list them all in LOCATION, comma-separated.
     </div>
   </div>
+
+  {% if audit %}
+  <div class="listing" style="margin-bottom:0;">
+    <div style="background:#2b1a05;border:1px solid #92600f;border-radius:12px;padding:14px 18px;">
+      <div style="font-weight:700;color:#fbbf24;margin-bottom:8px;">
+        ⚠ Routing gaps — fix these in the staff data ({{ audit|length }})
+      </div>
+      <ul style="margin-left:18px;color:#fcd34d;font-size:13px;line-height:1.7;">
+        {% for w in audit %}<li>{{ w }}</li>{% endfor %}
+      </ul>
+      <div style="color:#9ca3af;font-size:12px;margin-top:8px;">
+        These stay until fixed — correct the Excel and re-upload, or edit the rows below
+        (this list refreshes on reload).
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="listing">
     <h2 class="listing-title">Loaded Staff ({{ count }})</h2>
