@@ -1754,18 +1754,41 @@ def run_reminders(dry=False):
                 b["cheques"].append(r)
 
     results, sent_ids = [], set()
-    for email, b in buckets.items():
-        subject = f"PDC Reminder: {len(b['cheques'])} cheque(s) need attention — {today.strftime('%d/%m/%Y')}"
-        if dry:
+    if dry:
+        for email, b in buckets.items():
             results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": False})
-            continue
+    elif buckets:
+        cfg = smtp_config()
+        if not cfg["user"] or not cfg["password"]:
+            raise RuntimeError("SMTP not configured (set SMTP_USER and SMTP_APP_PASSWORD).")
         try:
-            send_email(email, subject, _digest_html(b["cheques"], today, b["label"]))
-            results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": True})
-            sent_ids |= b["ids"]
-        except Exception as e:
-            results.append({"to": email, "label": b["label"], "count": len(b["cheques"]),
-                            "sent": False, "error": str(e)})
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as server:
+                server.starttls()
+                server.login(cfg["user"], cfg["password"])
+                for email, b in buckets.items():
+                    subject = f"PDC Reminder: {len(b['cheques'])} cheque(s) need attention — {today.strftime('%d/%m/%Y')}"
+                    html = _digest_html(b["cheques"], today, b["label"])
+                    msg = MIMEMultipart("alternative")
+                    msg["Subject"] = subject
+                    msg["From"] = cfg["from"]
+                    msg["To"] = email
+                    msg.attach(MIMEText(html, "html"))
+                    try:
+                        server.sendmail(cfg["from"], [email], msg.as_string())
+                        results.append({"to": email, "label": b["label"], "count": len(b["cheques"]), "sent": True})
+                        sent_ids |= b["ids"]
+                    except Exception as e:
+                        results.append({"to": email, "label": b["label"], "count": len(b["cheques"]),
+                                        "sent": False, "error": str(e)})
+        except Exception as conn_err:
+            # Only report recipients not already handled — the connection can also
+            # drop mid-loop, after some digests have gone out.
+            done = {r["to"] for r in results}
+            for email, b in buckets.items():
+                if email in done:
+                    continue
+                results.append({"to": email, "label": b["label"], "count": len(b["cheques"]),
+                                "sent": False, "error": f"SMTP connection/login failed: {conn_err}"})
 
     if not dry and sent_ids:
         conn = get_db()
