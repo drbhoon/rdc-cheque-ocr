@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sign In — Cheque Scanner</title>
+  <title>Sign In — RDC Cheque Tracking and Control System</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0;
@@ -31,7 +31,7 @@
     <div class="logo">
       <img src="/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver"
            style="height:52px;background:#fff;border-radius:10px;padding:3px 8px;object-fit:contain;" />
-      <div><h1>Cheque Scanner</h1><p>Sign in to continue</p></div>
+      <div><h1>RDC Cheque Tracking and Control System</h1><p>Sign in to continue</p></div>
     </div>
     <form method="POST" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
       <label for="email">Email</label>
