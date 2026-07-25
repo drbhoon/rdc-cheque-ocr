@@ -21,11 +21,16 @@ COPY . .
 EXPOSE 3001
 
 # Gunicorn: 2 workers x 4 threads, 120s timeout (Claude OCR can take a few seconds).
+# --max-requests recycles each worker after ~800 requests (+/- jitter) so any
+# slow resource leak is reset periodically; --graceful-timeout bounds shutdown.
 # The app creates/migrates its own Postgres tables on startup.
 CMD ["gunicorn", "app:app", \
      "--bind", "0.0.0.0:3001", \
      "--workers", "2", \
      "--threads", "4", \
      "--timeout", "120", \
+     "--graceful-timeout", "30", \
+     "--max-requests", "800", \
+     "--max-requests-jitter", "100", \
      "--access-logfile", "-", \
      "--error-logfile", "-"]
