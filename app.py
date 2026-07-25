@@ -44,9 +44,24 @@ def get_client():
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set.")
         # Hard caps: the SDK default is 600s × multiple retries, which can park
-        # one of gunicorn's 8 worker threads (and its socket) for ~30 minutes.
-        _client = anthropic.Anthropic(api_key=api_key, timeout=60.0, max_retries=1)
+        # a worker thread (and its socket) for ~30 minutes. One attempt capped
+        # at 50s stays under nginx's 60s proxy_read_timeout, so a slow call
+        # surfaces as our clean 504 rather than nginx killing the connection.
+        _client = anthropic.Anthropic(api_key=api_key, timeout=50.0, max_retries=0)
     return _client
+
+
+def reset_client():
+    """Close the AI client's HTTP connection pool and drop it, so no half-open
+    socket survives an error/timeout path. The next call builds a fresh client.
+    On the happy path the client is kept and its pool reused."""
+    global _client
+    if _client is not None:
+        try:
+            _client.close()
+        except Exception:
+            pass
+        _client = None
 
 
 # ── Database helpers ─────────────────────────────────────────────────────────
@@ -717,15 +732,23 @@ def predict():
         data = read_cheque(img_bytes, media_type)
         return jsonify({"cheque": data})
     except (json.JSONDecodeError, ValueError):
+        # Parsing failed AFTER a completed API response — the socket is fine,
+        # the model just returned something unreadable. No client reset needed.
         return jsonify({"error": "Could not read this file. Please upload a clear photo "
                                  "(JPG/PNG) or a single-page PDF of the cheque and try again."}), 422
     except anthropic.APITimeoutError:
-        return jsonify({"error": "Cheque reading took too long and was stopped after 60 "
+        # Client disconnected / call stalled — tear down the socket pool so no
+        # dormant connection lingers, then rebuild on the next request.
+        reset_client()
+        return jsonify({"error": "Cheque reading took too long and was stopped after 50 "
                                  "seconds — the AI service may be busy. Please try again."}), 504
     except anthropic.APIConnectionError:
+        reset_client()
         return jsonify({"error": "Could not reach the AI service. Check the server's "
                                  "internet connection and try again."}), 502
     except Exception as e:
+        # Any other failure: close the AI socket pool defensively before returning.
+        reset_client()
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
