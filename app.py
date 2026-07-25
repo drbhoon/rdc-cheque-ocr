@@ -43,7 +43,9 @@ def get_client():
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set.")
-        _client = anthropic.Anthropic(api_key=api_key)
+        # Hard caps: the SDK default is 600s × multiple retries, which can park
+        # one of gunicorn's 8 worker threads (and its socket) for ~30 minutes.
+        _client = anthropic.Anthropic(api_key=api_key, timeout=60.0, max_retries=1)
     return _client
 
 
@@ -57,8 +59,24 @@ def db_url():
 
 
 def get_db():
+    """Short-lived connection with hard caps so a network stall can never hold
+    a worker thread indefinitely or leave sockets half-open."""
     import psycopg2
-    return psycopg2.connect(db_url())
+    conn = psycopg2.connect(
+        db_url(),
+        connect_timeout=10,
+        keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+        options="-c statement_timeout=30000 -c idle_in_transaction_session_timeout=60000",
+    )
+    # Server-side safety net (PG14+): even a leaked connection is reaped after
+    # 5 idle minutes. Ignored on older Postgres.
+    try:
+        with conn.cursor() as _c:
+            _c.execute("SET idle_session_timeout = '300s'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    return conn
 
 
 def init_db():
@@ -701,6 +719,12 @@ def predict():
     except (json.JSONDecodeError, ValueError):
         return jsonify({"error": "Could not read this file. Please upload a clear photo "
                                  "(JPG/PNG) or a single-page PDF of the cheque and try again."}), 422
+    except anthropic.APITimeoutError:
+        return jsonify({"error": "Cheque reading took too long and was stopped after 60 "
+                                 "seconds — the AI service may be busy. Please try again."}), 504
+    except anthropic.APIConnectionError:
+        return jsonify({"error": "Could not reach the AI service. Check the server's "
+                                 "internet connection and try again."}), 502
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
