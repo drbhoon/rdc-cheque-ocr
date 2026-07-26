@@ -4,10 +4,12 @@ import json
 import base64
 import io
 import smtplib
+import secrets
+import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from functools import wraps
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from flask import (Flask, request, jsonify, render_template, send_file,
                    session, redirect, url_for)
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -31,6 +33,11 @@ def landing_for(role):
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp", "pdf"}
 STAFF_EXTENSIONS = {"xlsx", "xls"}
+
+# Initial password for bulk-provisioned logins — forced change at first login.
+DEFAULT_PASSWORD = "Welcome@123"
+# Minutes a password-reset link stays valid.
+RESET_TOKEN_TTL_MIN = 60
 
 _client = None
 
@@ -223,6 +230,9 @@ def init_db():
         # Bulk-provisioned logins must set their own password at first login
         cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
                     "must_change_password BOOLEAN NOT NULL DEFAULT FALSE")
+        # Self-service password reset (Forgot password): single-use, time-limited token
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash TEXT")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ")
 
         # Change / edit log (freeze overrides, staff-master edits, user changes)
         cur.execute("""
@@ -254,6 +264,30 @@ def init_db():
             else:
                 print("[DB] No users yet and ADMIN_EMAIL/ADMIN_PASSWORD not set — "
                       "set them to seed the first admin.")
+
+        # Guaranteed admins: every email in ADMIN_EMAILS (comma-separated) is
+        # ensured to be an active HO_ADMIN. Existing accounts are promoted
+        # (password untouched); missing ones are created with the default
+        # password and must change it at first login. Runs every startup so it
+        # survives DB resets and lets an admin be added by env + redeploy.
+        for em in (os.environ.get("ADMIN_EMAILS") or "").split(","):
+            em = em.strip().lower()
+            if not em or "@" not in em:
+                continue
+            cur.execute("SELECT id, role, active FROM users WHERE LOWER(email)=%s", (em,))
+            row = cur.fetchone()
+            if row:
+                if row[1] != "HO_ADMIN" or not row[2]:
+                    cur.execute("UPDATE users SET role='HO_ADMIN', active=TRUE WHERE id=%s", (row[0],))
+                    print(f"[DB] Promoted {em} to active HO_ADMIN (ADMIN_EMAILS)")
+            else:
+                cur.execute(
+                    "INSERT INTO users (email, name, password_hash, role, must_change_password) "
+                    "VALUES (%s,%s,%s,'HO_ADMIN',TRUE)",
+                    (em, em.split("@")[0], generate_password_hash(DEFAULT_PASSWORD)),
+                )
+                print(f"[DB] Created HO_ADMIN login {em} (ADMIN_EMAILS; default password, "
+                      "must change at first login)")
 
         conn.commit()
         cur.close()
@@ -477,6 +511,114 @@ def login():
     return redirect(nxt)
 
 
+def app_base_url():
+    """Public base URL for links in emails. Behind the nginx TLS proxy the
+    public scheme is https and request.host is the domain; APP_BASE_URL overrides."""
+    b = (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
+    return b or f"https://{request.host}"
+
+
+@app.route("/forgot", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "GET":
+        return render_template("forgot.html")
+
+    email = (request.form.get("email") or "").strip().lower()
+    # Always show the same confirmation, so this can't be used to discover which
+    # emails have accounts.
+    generic = render_template("forgot.html", sent=True, email=email)
+    if not email or "@" not in email:
+        return generic
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM users WHERE LOWER(email)=%s AND active", (email,))
+        row = cur.fetchone()
+        if row:
+            raw = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw.encode()).hexdigest()
+            expires = datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_TTL_MIN)
+            cur.execute("UPDATE users SET reset_token_hash=%s, reset_token_expires=%s WHERE id=%s",
+                        (token_hash, expires, row[0]))
+            conn.commit()
+            link = f"{app_base_url()}/reset?token={raw}"
+            html = (
+                f"<p>Hello {row[1] or ''},</p>"
+                f"<p>A password reset was requested for your RDC Cheque Tracking and Control "
+                f"System login. Click the link below to set a new password. It is valid for "
+                f"{RESET_TOKEN_TTL_MIN} minutes and can be used once.</p>"
+                f'<p><a href="{link}">{link}</a></p>'
+                f"<p>If you did not request this, you can ignore this email — your password "
+                f"will not change.</p>"
+            )
+            try:
+                send_email(email, "Reset your PDC Cheque Tracker password", html)
+            except Exception as e:
+                # Don't leak SMTP state to the browser; surface it in the logs only.
+                print(f"[FORGOT] could not send reset email to {email}: {e}")
+        cur.close()
+    finally:
+        conn.close()
+    return generic
+
+
+def _user_for_reset_token(token):
+    """Return (id, email) for a valid, unexpired reset token, else None."""
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, email, reset_token_expires FROM users "
+                    "WHERE reset_token_hash=%s AND active", (token_hash,))
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+    if not row or not row[2] or row[2] < datetime.now(timezone.utc):
+        return None
+    return (row[0], row[1])
+
+
+@app.route("/reset", methods=["GET", "POST"])
+def reset_password():
+    token = (request.values.get("token") or "").strip()
+    who = _user_for_reset_token(token)
+
+    if request.method == "GET":
+        return render_template("reset.html", token=token, valid=bool(who))
+
+    def fail(msg, code=400):
+        return render_template("reset.html", token=token, valid=bool(who), error=msg), code
+
+    if not who:
+        return render_template("reset.html", valid=False), 400
+    new     = request.form.get("new") or ""
+    confirm = request.form.get("confirm") or ""
+    if len(new) < 8:
+        return fail("New password must be at least 8 characters.")
+    if new != confirm:
+        return fail("New password and confirmation do not match.")
+    if new == DEFAULT_PASSWORD:
+        return fail("Please choose a password different from the default one.")
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash=%s, must_change_password=FALSE, "
+            "reset_token_hash=NULL, reset_token_expires=NULL WHERE id=%s",
+            (generate_password_hash(new), who[0]),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return redirect(url_for("login", reset="1"))
+
+
 @app.before_request
 def _force_password_change():
     """Users provisioned with the default password can do nothing else until
@@ -540,9 +682,6 @@ def logout():
 # ── Routes: user management (HO Admin only) ───────────────────────────────────
 
 USER_COLS = ["id", "email", "name", "role", "active", "created_at"]
-
-# Initial password for bulk-provisioned logins — forced change at first login.
-DEFAULT_PASSWORD = "Welcome@123"
 
 
 @app.route("/users/bulk-logins", methods=["POST"])
