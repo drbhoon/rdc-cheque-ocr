@@ -2132,7 +2132,7 @@ def export():
     where, params = cheque_filters(today)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
-    COLS = ["id", "bank_name", "account_number", "cheque_number", "cheque_date",
+    COLS = ["id", "bank_name", "account_number", "cheque_number",
             "cheque_date_iso", "payee", "amount_words", "amount_numbers",
             "amount_value", "issuer_name", "status", "deposited_date", "deposit_bank",
             "deposit_reference", "cleared_date", "bounce_date", "bounce_reason",
@@ -2164,7 +2164,7 @@ def export():
         cd = r["cheque_date_iso"]
         out_rows.append([
             r["id"], r["bank_name"], r["account_number"], r["cheque_number"],
-            r["cheque_date"], cd, (cd + timedelta(days=90)) if cd else None,
+            cd, (cd + timedelta(days=90)) if cd else None,
             r["payee"], r["amount_words"], r["amount_numbers"], r["amount_value"],
             r["issuer_name"], friendly_status(r["status"], cd, today),
             r["deposited_date"], r["deposit_bank"], r["deposit_reference"],
@@ -2179,7 +2179,7 @@ def export():
     ws.title = "Cheques"
 
     HEADERS = [
-        "#", "Bank", "Account No", "Cheque No", "Cheque Date (raw)",
+        "#", "Bank", "Account No", "Cheque No",
         "Cheque Date", "Expiry Date", "Pay To", "Amount (Words)",
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
@@ -2187,7 +2187,7 @@ def export():
         "Returned On", "Return Mode", "Return Ref", "Cheque Location",
         "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
     ]
-    assert len(HEADERS) == 29
+    assert len(HEADERS) == 28
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
     hdr_fill  = PatternFill("solid", fgColor="4F46E5")
@@ -2212,7 +2212,7 @@ def export():
             if shade:
                 c.fill = shade
 
-    widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 13,
+    widths = [6, 16, 16, 11, 12, 12, 20, 26, 14, 13, 18, 13,
               12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
