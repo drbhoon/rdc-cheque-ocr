@@ -52,6 +52,7 @@
     .act.rtgs    { color: #5eead4; }
     .act.close   { color: #fbbf24; }
     .act.override{ color: #f59e0b; }
+    .act.ret     { color: #fdba74; }
 
     /* History timeline */
     .timeline { list-style: none; padding: 0; margin: 4px 0 0; }
@@ -81,6 +82,8 @@
     .modal label { display: block; font-size: 12px; color: #94a3b8; margin: 12px 0 5px; }
     .modal input { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
     .modal input:focus { border-color: #4f6ef7; }
+    .modal select { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+    .modal select:focus { border-color: #4f6ef7; }
     .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
     .modal-actions button { flex: 1; padding: 10px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; }
     .btn-cancel { background: #2d3148; color: #cbd5e1; }
@@ -142,12 +145,14 @@
                   <button class="act redeposit" onclick="openModal('redeposit',{{ r.id }})">Re-deposit</button>
                   <button class="act legal" onclick="openModal('legal',{{ r.id }})">Legal</button>
                   <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+                  <button class="act ret" onclick="openModal('return',{{ r.id }})">Return</button>
                 {% elif r.status == 'LEGAL' %}
                   <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
                   <button class="act close" onclick="openModal('close',{{ r.id }})">Close Case</button>
                 {% else %}
                   <button class="act deposit" onclick="openModal('deposit',{{ r.id }})">Deposited</button>
                   <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+                  <button class="act ret" onclick="openModal('return',{{ r.id }})">Return</button>
                 {% endif %}
                 <button class="act" onclick="showHistory({{ r.id }})">History</button>
                 {% if user and user.role == 'HO_ADMIN' %}
@@ -196,7 +201,8 @@
       current = { action, id };
       confirmBtn.style.display = '';
       const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced',
-                       legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case' };
+                       legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case',
+                       'return':'Return Cheque to Customer' };
       document.getElementById('modalTitle').textContent = titles[action];
       const f = document.getElementById('modalFields');
       if(action === 'bounce'){
@@ -210,6 +216,16 @@
         f.innerHTML = `<label>Payment Date</label><input id="m-date" type="date" value="${today}" />
                        <label>UTR / Reference</label><input id="m-ref" type="text" placeholder="RTGS/NEFT reference" />
                        <label>Amount Received (₹)</label><input id="m-amount" type="text" placeholder="e.g. 5,00,000" />` + REMARKS;
+      } else if(action === 'return'){
+        f.innerHTML = `<label>Return Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Returned Against</label>
+                       <select id="m-mode">
+                         <option value="Fresh cheque">Fresh cheque received</option>
+                         <option value="Online transfer">Online transfer / RTGS received</option>
+                         <option value="Other">Other</option>
+                       </select>
+                       <label>Reference</label><input id="m-ref" type="text" placeholder="new cheque no. / UTR reference" />` + REMARKS
+                       + `<div class="req-note">The cheque was handed back WITHOUT being banked. It stops being tracked and no more reminders are sent.</div>`;
       } else if(action === 'close'){
         f.innerHTML = `<label>Close Date</label><input id="m-date" type="date" value="${today}" />
                        <label>Closure Reason</label><input id="m-reason" type="text" placeholder="e.g. settled out of court" />` + REMARKS;
@@ -291,6 +307,7 @@
         if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
         else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
         else if(action === 'rtgs'){ body.reference = document.getElementById('m-ref')?.value; body.amount = document.getElementById('m-amount')?.value; }
+        else if(action === 'return'){ body.mode = document.getElementById('m-mode')?.value; body.reference = document.getElementById('m-ref')?.value; }
         else { body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
       }
       try{

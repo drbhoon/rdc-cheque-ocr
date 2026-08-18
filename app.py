@@ -159,6 +159,10 @@ def init_db():
             # HRIS / ERP linkage
             ("emp_code",          "TEXT"),   # uploader's employee code (from staff_master)
             ("cust_code",         "TEXT"),   # optional ERP customer code
+            # Returned to customer without being banked (fresh cheque / online transfer)
+            ("returned_date",     "DATE"),
+            ("return_mode",       "TEXT"),
+            ("return_reference",  "TEXT"),
         ]
         for name, ddl in cheque_cols:
             cur.execute(f"ALTER TABLE cheques ADD COLUMN IF NOT EXISTS {name} {ddl}")
@@ -1299,6 +1303,8 @@ def set_cust_code(cid):
 
 
 def _fetch_pending():
+    scope_where, scope_params, _ = accounts_scope()
+    scope_and = "".join(" AND " + w for w in scope_where)
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -1308,9 +1314,10 @@ def _fetch_pending():
                    (SELECT COUNT(*) FROM cheque_events e
                     WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count
             FROM cheques
-            WHERE status IN ('PENDING','BOUNCED','LEGAL')
+            WHERE status IN ('PENDING','BOUNCED','LEGAL'){scope_and}
             ORDER BY deposit_due_date NULLS LAST, id
-            """
+            """,
+            scope_params,
         )
         cols = REPORT_COLS + ["bounce_count"]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1382,17 +1389,42 @@ DASH_FILTERS = [
     ("cleared",    "Cleared"),
     ("legal",      "Legal"),
     ("rtgs",       "RTGS-settled"),
+    ("returned",   "Returned"),
     ("closed",     "Closed"),
     ("security",   "Security"),
 ]
 
 ACTIVE_STATUSES = ("PENDING", "BOUNCED", "LEGAL", "DEPOSITED")
 
+FRIENDLY_STATUS = {"DEPOSITED": "Deposited", "CLEARED": "Cleared", "BOUNCED": "Bounced",
+                   "LEGAL": "Legal", "RTGS_SETTLED": "RTGS-Settled", "CLOSED": "Closed",
+                   "SECURITY": "Security", "RETURNED": "Returned"}
 
-@app.route("/dashboard")
-@login_required
-def dashboard():
-    today = date.today()
+
+def friendly_status(status, cheque_date_iso, today=None):
+    """Plain-English status for reports: a still-bankable PENDING cheque is
+    'Current', one past its 90-day validity is 'Expired'."""
+    today = today or date.today()
+    s = (status or "").upper()
+    if s == "PENDING":
+        if cheque_date_iso and (today - cheque_date_iso).days > 90:
+            return "Expired"
+        return "Current"
+    return FRIENDLY_STATUS.get(s, s.title())
+
+
+# A cheque is "re-deposited" if its status is DEPOSITED and it has a REDEPOSITED event.
+REDEP_EXISTS = ("EXISTS (SELECT 1 FROM cheque_events e "
+                "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
+
+
+def cheque_filters(today):
+    """WHERE fragments + params for the cheque list — the accounts-wise scope
+    plus the on-screen filters. Shared by the dashboard and the Excel export so
+    a download always matches exactly what the user is looking at."""
+    where, params, _ = accounts_scope()
+    where, params = list(where), list(params)
+
     f_status = (request.args.get("status") or "all").lower()
     q        = (request.args.get("q") or "").strip()
     f_sales  = (request.args.get("sales") or "").strip()
@@ -1401,20 +1433,14 @@ def dashboard():
     f_from   = parse_iso_date(request.args.get("from"))
     f_to     = parse_iso_date(request.args.get("to"))
 
-    where, params = [], []
-
-    # A cheque is "re-deposited" if its status is DEPOSITED and it has a REDEPOSITED event.
-    REDEP_EXISTS = ("EXISTS (SELECT 1 FROM cheque_events e "
-                    "WHERE e.cheque_id = cheques.id AND e.action = 'REDEPOSITED')")
-
     # "Expired" = the 90-day bank validity has lapsed (can no longer be banked).
     today_m90 = today - timedelta(days=90)
     EXPIRED_SQL = "status = 'PENDING' AND cheque_date_iso IS NOT NULL AND cheque_date_iso < %s"
     NOT_EXPIRED = "(cheque_date_iso IS NULL OR cheque_date_iso >= %s)"
 
-    # status / derived filters
     status_map = {"bounced": "BOUNCED", "cleared": "CLEARED", "legal": "LEGAL",
-                  "rtgs": "RTGS_SETTLED", "closed": "CLOSED", "security": "SECURITY"}
+                  "rtgs": "RTGS_SETTLED", "closed": "CLOSED", "security": "SECURITY",
+                  "returned": "RETURNED"}
     if f_status in status_map:
         where.append("status = %s")
         params.append(status_map[f_status])
@@ -1445,8 +1471,47 @@ def dashboard():
         where.append("COALESCE(deposit_due_date, cheque_date_iso) >= %s"); params.append(f_from)
     if f_to:
         where.append("COALESCE(deposit_due_date, cheque_date_iso) <= %s"); params.append(f_to)
+    return where, params
 
+
+def accounts_scope():
+    """(where_fragments, params, locked) limiting rows to one accounts incharge.
+
+    An ACCOUNTS user is always locked to their own cheques — matched on the
+    accounts_email stamped on each cheque when it was saved. HO Admin / Viewer
+    see everything and may filter with ?accounts=<email>."""
+    me = current_user() or {}
+    if (me.get("role") or "") == "ACCOUNTS":
+        return (["LOWER(TRIM(accounts_email)) = %s"],
+                [(me.get("email") or "").strip().lower()], True)
+    f = (request.args.get("accounts") or "").strip().lower()
+    if f:
+        return ["LOWER(TRIM(accounts_email)) = %s"], [f], False
+    return [], [], False
+
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    today = date.today()
+    f_status = (request.args.get("status") or "all").lower()
+    q        = (request.args.get("q") or "").strip()
+    f_sales  = (request.args.get("sales") or "").strip()
+    f_loc    = (request.args.get("location") or "").strip()
+    f_plant  = (request.args.get("plant") or "").strip()
+    f_from   = parse_iso_date(request.args.get("from"))
+    f_to     = parse_iso_date(request.args.get("to"))
+    f_acct   = (request.args.get("accounts") or "").strip()
+
+    # Accounts-wise view: everything on this page (rows, summary cards, filter
+    # options) is limited to this scope.
+    scope_where, scope_params, scope_locked = accounts_scope()
+    scope_and = ("".join(" AND " + w for w in scope_where))
+    scope_only_sql = ("WHERE " + " AND ".join(scope_where)) if scope_where else ""
+
+    where, params = cheque_filters(today)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    today_m90 = today - timedelta(days=90)
 
     conn = get_db()
     try:
@@ -1467,8 +1532,8 @@ def dashboard():
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
 
         # Summary across ALL cheques (unfiltered), by status
-        cur.execute("SELECT status, COUNT(*), COALESCE(SUM(amount_value),0) "
-                    "FROM cheques GROUP BY status")
+        cur.execute(f"SELECT status, COUNT(*), COALESCE(SUM(amount_value),0) "
+                    f"FROM cheques {scope_only_sql} GROUP BY status", scope_params)
         summary = {s: {"count": c, "amount": float(a)} for s, c, a in cur.fetchall()}
         # Real totals (only true statuses — before adding derived overlays)
         all_count = sum(v["count"] for v in summary.values())
@@ -1476,16 +1541,16 @@ def dashboard():
 
         # Split DEPOSITED into first-time deposits vs re-deposited (status DEPOSITED + event)
         cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
-                    f"WHERE status='DEPOSITED' AND {REDEP_EXISTS}")
+                    f"WHERE status='DEPOSITED' AND {REDEP_EXISTS}{scope_and}", scope_params)
         rc, ra = cur.fetchone()
         summary["REDEP"] = {"count": rc, "amount": float(ra)}
         if "DEPOSITED" in summary:
             summary["DEPOSITED"] = {"count": summary["DEPOSITED"]["count"] - rc,
                                     "amount": summary["DEPOSITED"]["amount"] - float(ra)}
         # Derived expired count: PENDING whose 90-day validity has lapsed
-        cur.execute("SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
-                    "WHERE status = 'PENDING' AND cheque_date_iso IS NOT NULL AND cheque_date_iso < %s",
-                    (today_m90,))
+        cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
+                    f"WHERE status = 'PENDING' AND cheque_date_iso IS NOT NULL "
+                    f"AND cheque_date_iso < %s{scope_and}", [today_m90] + scope_params)
         oc, oa = cur.fetchone()
         summary["EXPIRED"] = {"count": oc, "amount": float(oa)}
         # Keep Pending and Expired mutually exclusive (Expired is a subset of PENDING)
@@ -1494,12 +1559,21 @@ def dashboard():
                                   "amount": summary["PENDING"]["amount"] - float(oa)}
 
         # Filter dropdown options
-        cur.execute("SELECT DISTINCT sales_name FROM cheques WHERE sales_name IS NOT NULL ORDER BY 1")
+        cur.execute(f"SELECT DISTINCT sales_name FROM cheques "
+                    f"WHERE sales_name IS NOT NULL{scope_and} ORDER BY 1", scope_params)
         sales_opts = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT DISTINCT location FROM cheques WHERE location IS NOT NULL ORDER BY 1")
+        cur.execute(f"SELECT DISTINCT location FROM cheques "
+                    f"WHERE location IS NOT NULL{scope_and} ORDER BY 1", scope_params)
         loc_opts = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT DISTINCT plant FROM cheques WHERE plant IS NOT NULL ORDER BY 1")
+        cur.execute(f"SELECT DISTINCT plant FROM cheques "
+                    f"WHERE plant IS NOT NULL{scope_and} ORDER BY 1", scope_params)
         plant_opts = [r[0] for r in cur.fetchall()]
+        # Accounts-incharge dropdown (admins / viewers only — ACCOUNTS is locked)
+        acct_opts = []
+        if not scope_locked:
+            cur.execute("SELECT DISTINCT LOWER(TRIM(accounts_email)) FROM cheques "
+                        "WHERE COALESCE(TRIM(accounts_email),'') <> '' ORDER BY 1")
+            acct_opts = [r[0] for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
@@ -1518,6 +1592,8 @@ def dashboard():
         sel_sales=f_sales, sel_loc=f_loc, sel_plant=f_plant,
         f_from=request.args.get("from") or "", f_to=request.args.get("to") or "",
         total_amount=total_amount, today=today.isoformat(), locations=CHEQUE_LOCATIONS,
+        acct_opts=acct_opts, sel_acct=f_acct, scope_locked=scope_locked,
+        scope_email=(current_user() or {}).get("email"),
     )
 
 
@@ -1597,6 +1673,23 @@ def mark_rtgs(cid):
                        reference=ref, remarks=rem,
                        extra_sql="rtgs_date=%s, rtgs_reference=%s, rtgs_amount=%s",
                        extra_vals=(rdate, ref, amount))
+
+
+@app.route("/cheque/<int:cid>/return", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def mark_returned(cid):
+    """Cheque handed back to the customer WITHOUT being banked — swapped for a
+    fresh cheque or settled by online transfer. Closes the cheque: no further
+    tracking, no reminders."""
+    d = request.get_json(silent=True) or {}
+    rdate = parse_iso_date(d.get("date")) or date.today()
+    mode  = (d.get("mode") or "").strip() or None          # Fresh cheque / Online transfer / Other
+    ref   = (d.get("reference") or "").strip() or None     # new cheque no. / UTR
+    rem   = (d.get("remarks") or "").strip() or None
+    return _transition(cid, "RETURNED", action="RETURNED", action_date=rdate,
+                       reference=ref, reason=mode, remarks=rem,
+                       extra_sql="returned_date=%s, return_mode=%s, return_reference=%s",
+                       extra_vals=(rdate, mode, ref))
 
 
 @app.route("/cheque/<int:cid>/close", methods=["POST"])
@@ -2033,26 +2126,53 @@ def export():
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+    today = date.today()
+    # Same accounts scope + on-screen filters as the dashboard, so what you
+    # download is exactly what you were looking at.
+    where, params = cheque_filters(today)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    COLS = ["id", "bank_name", "account_number", "cheque_number", "cheque_date",
+            "cheque_date_iso", "payee", "amount_words", "amount_numbers",
+            "amount_value", "issuer_name", "status", "deposited_date", "deposit_bank",
+            "deposit_reference", "cleared_date", "bounce_date", "bounce_reason",
+            "returned_date", "return_mode", "return_reference", "cheque_location",
+            "sales_name", "sales_email", "location", "plant", "bh_name"]
+
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
-            SELECT id, bank_name, account_number, cheque_number, cheque_date,
-                   cheque_date_iso, deposit_due_date, payee, amount_words,
-                   amount_numbers, amount_value, issuer_name, status,
-                   deposited_date, deposit_bank, deposit_reference,
-                   cleared_date, bounce_date, bounce_reason, cheque_location,
-                   sales_name, sales_email, location, plant, bh_name,
+            f"""
+            SELECT {', '.join(COLS)},
                    TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI')
             FROM cheques
+            {where_sql}
             ORDER BY COALESCE(deposit_due_date, cheque_date_iso) DESC NULLS LAST, id DESC
-            """
+            """,
+            params,
         )
-        rows = cur.fetchall()
+        rows = [dict(zip(COLS + ["scanned_ist"], r)) for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
+
+    # Expiry = 90 days after the cheque date (Indian cheque validity); Status is
+    # the plain-English one: Current / Expired / Returned / Deposited / …
+    out_rows = []
+    for r in rows:
+        cd = r["cheque_date_iso"]
+        out_rows.append([
+            r["id"], r["bank_name"], r["account_number"], r["cheque_number"],
+            r["cheque_date"], cd, (cd + timedelta(days=90)) if cd else None,
+            r["payee"], r["amount_words"], r["amount_numbers"], r["amount_value"],
+            r["issuer_name"], friendly_status(r["status"], cd, today),
+            r["deposited_date"], r["deposit_bank"], r["deposit_reference"],
+            r["cleared_date"], r["bounce_date"], r["bounce_reason"],
+            r["returned_date"], r["return_mode"], r["return_reference"],
+            r["cheque_location"], r["sales_name"], r["sales_email"], r["location"],
+            r["plant"], r["bh_name"], r["scanned_ist"],
+        ])
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -2060,12 +2180,14 @@ def export():
 
     HEADERS = [
         "#", "Bank", "Account No", "Cheque No", "Cheque Date (raw)",
-        "Cheque Date", "Deposit Due", "Pay To", "Amount (Words)",
+        "Cheque Date", "Expiry Date", "Pay To", "Amount (Words)",
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
-        "Cleared On", "Bounced On", "Bounce Reason", "Cheque Location",
+        "Cleared On", "Bounced On", "Bounce Reason",
+        "Returned On", "Return Mode", "Return Ref", "Cheque Location",
         "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
     ]
+    assert len(HEADERS) == 29
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
     hdr_fill  = PatternFill("solid", fgColor="4F46E5")
@@ -2079,7 +2201,7 @@ def export():
     ws.row_dimensions[1].height = 30
 
     alt = PatternFill("solid", fgColor="F5F3FF")
-    for ri, row in enumerate(rows, 2):
+    for ri, row in enumerate(out_rows, 2):
         shade = alt if ri % 2 == 0 else None
         for ci, val in enumerate(row, 1):
             c = ws.cell(row=ri, column=ci, value=val if val is not None else "")
@@ -2090,8 +2212,8 @@ def export():
             if shade:
                 c.fill = shade
 
-    widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 11,
-              12, 16, 14, 11, 11, 20, 14, 18, 22, 14, 12, 18, 20]
+    widths = [6, 16, 16, 11, 14, 12, 12, 20, 26, 14, 13, 18, 13,
+              12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
