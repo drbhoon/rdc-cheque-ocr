@@ -25,7 +25,7 @@
     .c-all .dotc{background:#94a3b8}.c-expired .dotc{background:#ef4444}.c-pending .dotc{background:#4f6ef7}
     .c-deposited .dotc{background:#22d3ee}.c-bounced .dotc{background:#f87171}.c-redeposited .dotc{background:#93b0ff}
     .c-cleared .dotc{background:#4ade80}.c-legal .dotc{background:#a855f7}.c-rtgs .dotc{background:#5eead4}.c-closed .dotc{background:#6b7280}
-    .c-security .dotc{background:#eab308}
+    .c-security .dotc{background:#eab308}.c-returned .dotc{background:#f97316}
 
     /* Filter bar */
     form.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #161922; border: 1px solid #2d3148; border-radius: 10px; padding: 14px; margin-bottom: 20px; }
@@ -49,6 +49,7 @@
     .badge.LEGAL{background:rgba(168,85,247,.18);color:#d8b4fe}.badge.RTGS_SETTLED{background:rgba(20,184,166,.18);color:#5eead4}
     .badge.CLOSED{background:rgba(107,114,128,.2);color:#cbd5e1}
     .badge.SECURITY{background:rgba(234,179,8,.18);color:#fde047}
+    .badge.RETURNED{background:rgba(249,115,22,.18);color:#fdba74}
     .bounce-n { font-size: 9px; font-weight: 700; color: #fca5a5; margin-left: 5px; }
 
     .actions { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -56,7 +57,7 @@
     .act:hover { border-color: #4f6ef7; color: #fff; }
     .act.deposit{color:#4ade80}.act.bounce{color:#fca5a5}.act.redeposit{color:#93b0ff}.act.clear{color:#86efac}
     .act.legal{color:#d8b4fe}.act.rtgs{color:#5eead4}.act.close{color:#fbbf24}.act.override{color:#f59e0b}
-    .act.del{color:#f87171}.act.del:hover{border-color:#f87171}
+    .act.del{color:#f87171}.act.del:hover{border-color:#f87171}.act.ret{color:#fdba74}
 
     .empty { padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
     .tablewrap { overflow-x: auto; }
@@ -70,6 +71,8 @@
     .modal label { display: block; font-size: 12px; color: #94a3b8; margin: 12px 0 5px; }
     .modal input { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
     .modal input:focus { border-color: #4f6ef7; }
+    .modal select { width: 100%; background: #0f1117; border: 1px solid #2d3148; border-radius: 8px; padding: 9px 12px; color: #e2e8f0; font-size: 14px; outline: none; }
+    .modal select:focus { border-color: #4f6ef7; }
     .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
     .modal-actions button { flex: 1; padding: 10px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; }
     .btn-cancel { background: #2d3148; color: #cbd5e1; } .btn-confirm { background: linear-gradient(135deg,#059669,#047857); color: #fff; }
@@ -92,13 +95,14 @@
         {% if user and user.role in ['HO_ADMIN','ACCOUNTS','SALES'] %}<a href="/">＋ Scan</a>{% endif %}
         <a href="/report">📋 Action List</a>
         {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
-        <a href="/export" target="_blank">📥 Excel</a>
+        <a href="/export{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}"
+           target="_blank" title="Downloads exactly the cheques shown below">📥 Excel</a>
         <a href="/logout">Logout ({{ user.role }})</a>
       </div>
     </div>
 
-    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('closed','Closed'),('security','Security')] %}
-    {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','closed':'CLOSED','security':'SECURITY'} %}
+    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('returned','Returned'),('closed','Closed'),('security','Security')] %}
+    {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','returned':'RETURNED','closed':'CLOSED','security':'SECURITY'} %}
     <div class="cards">
       {% for token, label in order %}
       {% set k = keymap[token] %}
@@ -132,10 +136,23 @@
         </select></div>
       <div><label>From</label><input type="date" name="from" value="{{ f_from }}" /></div>
       <div><label>To</label><input type="date" name="to" value="{{ f_to }}" /></div>
+      {% if not scope_locked and acct_opts %}
+      <div><label>Accounts</label>
+        <select name="accounts"><option value="">All</option>
+          {% for a in acct_opts %}<option value="{{ a }}" {{ 'selected' if sel_acct==a else '' }}>{{ a }}</option>{% endfor %}
+        </select></div>
+      {% endif %}
       <button class="apply" type="submit">Apply</button>
       <a class="clear" href="/dashboard">Clear</a>
     </form>
 
+    {% if scope_locked %}
+    <div style="margin-bottom:12px;padding:9px 14px;border-radius:9px;background:rgba(34,211,238,.08);
+                border:1px solid rgba(34,211,238,.25);color:#67e8f9;font-size:13px;">
+      👤 Showing <b>your cheques only</b> — those routed to {{ scope_email }} as Accounts incharge.
+      The Excel download covers the same set.
+    </div>
+    {% endif %}
     <div class="totbar">{{ rows|length }} cheque(s) shown · Total ₹ {{ '{:,.0f}'.format(total_amount) }}</div>
 
     <div class="tablewrap">
@@ -168,6 +185,7 @@
               {% if r.status == 'PENDING' %}
                 <button class="act deposit" onclick="openModal('deposit',{{ r.id }})">Deposited</button>
                 <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
+                <button class="act ret" onclick="openModal('return',{{ r.id }})">Return</button>
               {% elif r.status == 'DEPOSITED' %}
                 <button class="act clear" onclick="openModal('clear',{{ r.id }})">Cleared</button>
                 <button class="act bounce" onclick="openModal('bounce',{{ r.id }})">Bounce</button>
@@ -175,6 +193,7 @@
                 <button class="act redeposit" onclick="openModal('redeposit',{{ r.id }})">Re-deposit</button>
                 <button class="act legal" onclick="openModal('legal',{{ r.id }})">Legal</button>
                 <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
+                <button class="act ret" onclick="openModal('return',{{ r.id }})">Return</button>
               {% elif r.status == 'LEGAL' %}
                 <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
                 <button class="act close" onclick="openModal('close',{{ r.id }})">Close</button>
@@ -252,7 +271,8 @@
     function openModal(action, id){
       current = { action, id }; confirmBtn.style.display='';
       const titles = { deposit:'Mark Deposited', redeposit:'Re-deposit Cheque', bounce:'Mark Bounced',
-                       clear:'Mark Cleared', legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case' };
+                       clear:'Mark Cleared', legal:'File Legal Case', rtgs:'RTGS / Direct Payment Received', close:'Close Case',
+                       'return':'Return Cheque to Customer' };
       document.getElementById('modalTitle').textContent = titles[action];
       const f = document.getElementById('modalFields');
       if(action === 'bounce'){
@@ -268,6 +288,16 @@
         f.innerHTML = `<label>Payment Date</label><input id="m-date" type="date" value="${today}" />
                        <label>UTR / Reference</label><input id="m-ref" type="text" placeholder="RTGS/NEFT reference" />
                        <label>Amount Received (₹)</label><input id="m-amount" type="text" placeholder="e.g. 5,00,000" />` + REMARKS;
+      } else if(action === 'return'){
+        f.innerHTML = `<label>Return Date</label><input id="m-date" type="date" value="${today}" />
+                       <label>Returned Against</label>
+                       <select id="m-mode">
+                         <option value="Fresh cheque">Fresh cheque received</option>
+                         <option value="Online transfer">Online transfer / RTGS received</option>
+                         <option value="Other">Other</option>
+                       </select>
+                       <label>Reference</label><input id="m-ref" type="text" placeholder="new cheque no. / UTR reference" />` + REMARKS
+                       + `<div class="req-note">The cheque was handed back WITHOUT being banked. It stops being tracked and no more reminders are sent.</div>`;
       } else if(action === 'close'){
         f.innerHTML = `<label>Close Date</label><input id="m-date" type="date" value="${today}" />
                        <label>Closure Reason</label><input id="m-reason" type="text" placeholder="e.g. settled out of court" />` + REMARKS;
@@ -342,6 +372,7 @@
         body = { date: document.getElementById('m-date')?.value, remarks: document.getElementById('m-remarks')?.value };
         if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
         else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
+        else if(action === 'return'){ body.mode = document.getElementById('m-mode')?.value; body.reference = document.getElementById('m-ref')?.value; }
         else if(action === 'rtgs'){ body.reference = document.getElementById('m-ref')?.value; body.amount = document.getElementById('m-amount')?.value; }
         else if(action === 'deposit' || action === 'redeposit'){ body.bank = document.getElementById('m-bank')?.value; body.reference = document.getElementById('m-ref')?.value; }
       }
