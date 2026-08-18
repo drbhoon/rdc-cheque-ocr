@@ -11,82 +11,116 @@ drbhoon/rdc-ledger-reconciliation) — never edit it from this chat, and vice-ve
 | Branch | Purpose | Target |
 |---|---|---|
 | `main` | Development — auto-deploys | Railway → **https://pdc.bhoon.org** |
-| `prod` | Production — Docker | Self-hosted Linux server (Azure) via docker compose |
+| `prod` | Production — Docker | Company Azure server → **pdc.rdcc.ai** (LAN 192.168.100.7:3001) |
 
 - Local folder may sit on `prod`; check `git branch` before editing.
 - Railway uses Nixpacks (`railway.json`, gunicorn start command). Docker files
   (Dockerfile / docker-compose.yml / .env.example) exist only on `prod`.
+- Prod deploy: server `developer@RDC-AI-UBUNTU:~/projects/rdc-pdc-app`,
+  `git pull && docker compose up -d --build`.
 - Daily reminder cron: cron-job.org hits `GET /cron/reminders?key=<CRON_SECRET>` daily
   ~9:00 IST (do NOT use Railway cron — it restarts the service).
 
-## Stack
-Python 3.11 + Flask (single `app.py`, ~1,500 lines) · Gunicorn (2 workers × 4 threads,
-120s timeout) · PostgreSQL (psycopg2-binary) · Claude `claude-sonnet-4-6` vision for OCR ·
-openpyxl (Excel export + staff upload) · Jinja templates in `templates/`
-(index=scan, dashboard, report, staff, users, reminders, login).
+## Prod ports (prod branch)
+Container ports EQUAL host ports (8000/5432 clash with other apps on the server):
+app listens on **3001** (Dockerfile EXPOSE + gunicorn bind), Postgres on **3002**
+(compose `command: -p 3002`, healthcheck `-p 3002`, ports `3002:3002`), and
+DATABASE_URL uses host `rdc-postgres-db:3002`.
 
-## Auth & roles
-Session login (werkzeug hashes). First HO Admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD`
-only while `users` table is empty; after that manage users in-app (👤 Users).
-| Role | Can |
-|---|---|
-| HO_ADMIN | everything: users, staff master, reminders, override locked fields, delete security cheques |
-| ACCOUNTS | scan/save + full cheque lifecycle |
-| SALES | scan/save only |
-| VIEWER | read-only dashboard/report/export |
-Post-login landing is role-based (uploaders → scan, viewer → dashboard). Forbidden pages
-redirect to the user's landing; JSON/POST return 403.
+## Stack
+Python 3.11 + Flask (single `app.py`) · Gunicorn (2 workers × 4 threads, 120s timeout) ·
+PostgreSQL (psycopg2-binary) · Claude `claude-sonnet-4-6` vision for OCR · openpyxl ·
+Jinja templates in `templates/` (index=scan, dashboard, report, staff, users, reminders,
+login, password) · company logo at `static/rdc-logo.jpg` on every page header.
+
+## Employee master & roles (drives EVERYTHING)
+`employees` table, uploaded as Excel on the Staff Master page — columns
+**EMP_CODE, EMP_NAME, ROLE, EMAIL, LOCATION, PLANT** (one row per employee, key EMP_CODE).
+- **ROLE → app authority at login** (session role; users-table role is only the
+  fallback, e.g. seeded admin): SALES→scan/save · ACCOUNTS→scan+lifecycle ·
+  BH/RM→VIEWER (read-only) · HO/ADMIN→HO_ADMIN. Mapping in `EMP_ROLE_MAP`.
+- **ROLE+LOCATION → routing**: each location has an ACCOUNTS + BH pair; a cheque is
+  auto-assigned to the pair covering the sales person's location. ACCOUNTS/BH rows
+  covering several locations list them comma-separated in LOCATION.
+- **Uploader gate**: nobody can save cheques unless their login email is in the
+  employee master (emp_code stamped on every cheque as `cheques.emp_code`).
+  Optional ERP `cust_code` entered at scan or set later from dashboard (audited).
+- **Pairing audit** (`pairing_warnings()`): runs on every Staff page load + upload;
+  sticky amber box lists locations with missing/duplicate ACCOUNTS or BH.
+- Legacy `staff_master` table still exists in DB but is unused.
+
+## Accounts-wise scope (who sees which cheques)
+`accounts_scope()` + `cheque_filters()` in app.py are the single source of truth, shared by
+the dashboard, the action list (`/report`) and the Excel export — so a download always
+matches the screen and the three can never drift apart.
+- **ACCOUNTS** users are locked to cheques whose `accounts_email` is their login email
+  (rows, summary cards, filter dropdowns, action list, export) and see a banner saying so.
+- **HO_ADMIN / VIEWER** see everything and get an extra "Accounts" filter (`?accounts=<email>`).
+- SALES is not scoped this way (unchanged behaviour).
+The dashboard's Excel link passes the current query string through to `/export`.
+
+## Logins
+`users` table. First HO Admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD` while table
+empty. **Bulk logins**: Users page → "Create logins from Staff Master" gives every
+employee-master person without a login the password `Welcome@123`
+(`DEFAULT_PASSWORD`) + `must_change_password` — forced to set their own at first
+login (`/password`, enforced by a `before_request` guard). HO rows are excluded from
+bulk creation — admins are added manually with strong passwords. Admin password
+resets also force a change at next login.
+**Forgot password**: link on the login page → `/forgot` emails a single-use, 60-minute
+reset link (a secure random token; only its SHA-256 is stored) → `/reset`. The confirmation
+is identical whether or not the email exists (no account enumeration). Uses the same SMTP as
+reminders; link base = `APP_BASE_URL` (falls back to `https://<request host>`).
+**ADMIN_EMAILS** (comma-separated env): every startup ensures each listed email is an active
+HO_ADMIN — existing accounts promoted (password untouched), missing ones created with
+`DEFAULT_PASSWORD` + forced first-login change. Grants admin without DB access.
 
 ## Cheque lifecycle
 PENDING → DEPOSITED → CLEARED, or BOUNCED → (RE)DEPOSITED / LEGAL / RTGS_SETTLED → CLOSED.
+Plus RETURNED (terminal): handed back to the customer WITHOUT being banked — swapped for a
+fresh cheque or settled by online transfer. `/cheque/<id>/return` (HO_ADMIN + ACCOUNTS)
+records returned_date/return_mode/return_reference; no further tracking, no reminders.
 Plus SECURITY (undated collateral cheques: no tracking/reminders, HO-Admin-deletable).
 - "Expired" = 90-day bank validity lapsed (cheque_date + 90 < today), NOT past due date.
-  Pending and Expired are mutually exclusive buckets.
-- Cheque Date & Amount are FROZEN after save; only HO_ADMIN `/cheque/<id>/override` with a
-  mandatory reason (audited in `change_log`, shown in History → Edit Log).
-- Every lifecycle action records `done_by`; cheque creation records `created_by`
-  (History shows "CREATED · by <user>").
-- Reminders: daily digests from 7 days before deposit-due date, to each Accounts incharge +
-  each Business Head (their own cheques) + HO mailbox (all), de-duplicated by email.
-  CLEARED / RTGS_SETTLED / CLOSED / DEPOSITED / SECURITY excluded; LEGAL persists until Close.
+- Cheque Date & Amount FROZEN after save; only HO_ADMIN `/cheque/<id>/override` with a
+  mandatory reason (audited in `change_log`).
+- Every lifecycle action records `done_by`; creation records `created_by` + `emp_code`.
+- Reminders: daily digests from 7 days before due date to Accounts incharge + BH (own
+  cheques) + HO mailbox, de-duplicated. CLEARED/RTGS/CLOSED/DEPOSITED/SECURITY excluded.
 
 ## DB tables (auto-created/migrated in `init_db()` on startup)
-`cheques` (OCR fields + lifecycle + staff snapshot + created_by + cheque_location),
-`staff_master` (Excel-uploaded, key SALES_NAME), `cheque_events` (timeline, remarks,
-done_by), `users`, `change_log` (audit). Duplicate guard: unique (account_number,
-cheque_number) partial index → 409 on re-save.
+`cheques` (OCR + lifecycle + staff snapshot + emp_code/cust_code + returned_date/
+return_mode/return_reference), `employees`
+(employee master), `staff_master` (legacy, unused), `cheque_events`, `users`
+(+must_change_password, reset_token_hash, reset_token_expires), `change_log`. Duplicate guard: unique
+(account_number, cheque_number) partial index → 409 on re-save.
 
 ## OCR prompt hard-won rules (in `PROMPT`, app.py — don't regress these)
 - Bank name = top-left logo; ignore bottom rubber stamps (collecting bank).
 - Cheque number = LEFTMOST MICR block only; MICR E-13B font: scrutinise first digit (1↔9↔7).
-- Cheque date = ONLY the labelled `D D M M Y Y Y Y` boxes; ignore stationery/print dates
-  (e.g. "CAV/2024/UF 09/12/24"); photo may be rotated — read by labels not position.
+- Cheque date = ONLY the labelled `D D M M Y Y Y Y` boxes; ignore stationery/print dates;
+  photo may be rotated — read by labels not position.
 - Account number = printed "A/c No." field digit-for-digit; never pad; null if unsure.
 - Amounts: words vs figures cross-checked in UI (match badge).
 
 ## Conventions
-- All displayed dates DD/MM/YYYY (`dmy` Jinja filter; scan screen uses DD/MM/YYYY text
-  inputs, ISO internally). Excel date cells formatted DD/MM/YYYY.
+- All displayed dates DD/MM/YYYY (`dmy` filter; scan uses DD/MM/YYYY text inputs, ISO
+  internally). Excel export columns are stable — do NOT add/remove without an explicit ask.
+  It shows **Expiry Date** (cheque date + 90 days), not the deposit-due date, and a
+  plain-English **Status** via `friendly_status()`: Current / Expired / Returned /
+  Deposited / Cleared / Bounced / Legal / RTGS-Settled / Closed / Security.
 - Frontend: vanilla JS in templates; pass row data via `data-*` attributes, NEVER inline
   `|tojson` in onclick (breaks on quotes/decimals).
-- On save the scan screen fully resets; camera capture supported on mobile.
-- Every DB write route: rollback on error; gunicorn multi-worker so one hang ≠ outage.
+- Every DB write route: rollback on error.
+- `User Test Data -ignore/` is local-only (gitignored) — never commit it.
 
 ## Env vars
 `ANTHROPIC_API_KEY`, `DATABASE_URL`, `SECRET_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
 `SMTP_HOST`(smtp.gmail.com), `SMTP_PORT`(587), `SMTP_USER`, `SMTP_APP_PASSWORD`,
-`SMTP_FROM`(noreply@rdc.in), `HO_REMINDER_EMAIL`(creditcontrol.ho@rdc.in), `CRON_SECRET`.
+`SMTP_FROM`(noreply@rdc.in), `HO_REMINDER_EMAIL`(creditcontrol.ho@rdc.in), `CRON_SECRET`,
+`ADMIN_EMAILS` (guaranteed HO admins), `APP_BASE_URL` (reset-link base).
 Docker/prod additionally: `POSTGRES_USER/PASSWORD/DB` (see `.env.example`; `.env` gitignored).
 
-## ⚠ PENDING TASK (prod branch)
-Backend team wants container ports to EQUAL host ports (8000/5432 clash with other apps
-on the server): app must listen on **3001** and Postgres on **3002** inside containers.
-Status: Dockerfile locally edited to bind gunicorn 0.0.0.0:3001 (UNCOMMITTED);
-docker-compose.yml still `3001:8000` and Postgres internal 5432 (host 3002).
-To finish: compose → app `3001:3001`, db `3002:3002` with `command: -p 3002` and
-healthcheck `-p 3002`; `.env.example` DATABASE_URL host `rdc-postgres-db:3002`;
-commit + push to `prod`.
-
-## Testing users (test phase)
-Login ksbhoon@rdc.in exists as HO_ADMIN. Staff manual:
+## Live users
+Prod seeded HO Admin: aniket.sawant@rdc.in (from server .env). Staff manual:
 `D:\RDC Drive\AI\Cowork\PDC Cheque Tracker - Staff User Manual.docx`.
