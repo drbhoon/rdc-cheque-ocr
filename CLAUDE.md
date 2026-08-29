@@ -103,6 +103,32 @@ return_mode/return_reference), `employees`
 - Account number = printed "A/c No." field digit-for-digit; never pad; null if unsure.
 - Amounts: words vs figures cross-checked in UI (match badge).
 
+## Performance guardrails (don't remove these)
+Users reported the app getting slower over days until threads/sockets were cleared.
+- **Outbound AI call**: explicit per-phase timeouts — `httpx.Timeout(connect=10, read=50,
+  write=30, pool=10)` + `max_retries=0`. Read stays under nginx's 60s `proxy_read_timeout`
+  so a slow upstream returns our clean 504 instead of nginx killing the socket. Every
+  error path calls `reset_client()`, which closes the HTTP pool so nothing lingers.
+- **DB**: `connect_timeout=10` plus `statement_timeout=30s`,
+  `idle_in_transaction_session_timeout=60s`, `idle_session_timeout=5min`, all passed in the
+  libpq `options` string (one round trip — every request opens a fresh connection; there is
+  no pool) with TCP keepalives.
+- **`HOT_INDEXES` / `ensure_indexes()`** — the big one. A FOREIGN KEY does **not** create an
+  index in Postgres, so `cheque_events.cheque_id` had none, while the dashboard runs two
+  correlated sub-queries against `cheque_events` **per row** (bounce count, re-deposit
+  check). Those were sequential scans of a table that grows with every lifecycle action, so
+  page time crept up as data accumulated. Indexes are created after the migration commits,
+  each in its own guarded transaction, so a failure (or the two-worker boot race) can never
+  roll back the migration or stop startup.
+- **gunicorn**: `--timeout 120`, `--graceful-timeout 30`, `--max-requests 800` (+jitter) as
+  the second line of defence.
+- **Slow-request log**: anything over `SLOW_REQUEST_MS` (default 3000) prints
+  `[SLOW] <ms> <method> <path> user=<email> -> <status>`. Check with
+  `docker compose logs rdc-cheque-ocr-service | grep SLOW`. Logs `request.path` only —
+  never `full_path`, which would leak the `/reset?token=…` reset token.
+- **Not yet done**: the dashboard/export render *every* matching row (no pagination). If
+  slowness returns after the indexes, page weight is the next thing to fix.
+
 ## Conventions
 - All displayed dates DD/MM/YYYY (`dmy` filter; scan uses DD/MM/YYYY text inputs, ISO
   internally). Excel export columns are stable — do NOT add/remove without an explicit ask.
@@ -118,7 +144,8 @@ return_mode/return_reference), `employees`
 `ANTHROPIC_API_KEY`, `DATABASE_URL`, `SECRET_KEY`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,
 `SMTP_HOST`(smtp.gmail.com), `SMTP_PORT`(587), `SMTP_USER`, `SMTP_APP_PASSWORD`,
 `SMTP_FROM`(noreply@rdc.in), `HO_REMINDER_EMAIL`(creditcontrol.ho@rdc.in), `CRON_SECRET`,
-`ADMIN_EMAILS` (guaranteed HO admins), `APP_BASE_URL` (reset-link base).
+`ADMIN_EMAILS` (guaranteed HO admins), `APP_BASE_URL` (reset-link base),
+`SLOW_REQUEST_MS` (slow-request log threshold, default 3000).
 Docker/prod additionally: `POSTGRES_USER/PASSWORD/DB` (see `.env.example`; `.env` gitignored).
 
 ## Live users

@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import json
 import base64
 import io
@@ -11,16 +12,44 @@ from email.mime.multipart import MIMEMultipart
 from functools import wraps
 from datetime import date, datetime, timedelta, timezone
 from flask import (Flask, request, jsonify, render_template, send_file,
-                   session, redirect, url_for)
+                   session, redirect, url_for, g)
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 import anthropic
+import httpx   # ships with the anthropic SDK; used for explicit timeouts
 
 load_dotenv()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-insecure-change-me")
+
+# ── Slow-request logging ─────────────────────────────────────────────────────
+# Diagnostics for recurring slowness: any request over SLOW_REQUEST_MS is
+# printed to the container log with its path, user and duration, so the next
+# build-up can be traced to a specific endpoint instead of guessed at.
+#   docker compose logs rdc-cheque-ocr-service | grep SLOW
+SLOW_REQUEST_MS = int(os.environ.get("SLOW_REQUEST_MS", "3000"))
+
+
+@app.before_request
+def _start_request_timer():
+    g._t0 = time.perf_counter()
+
+
+@app.after_request
+def _log_slow_request(resp):
+    t0 = getattr(g, "_t0", None)
+    if t0 is not None:
+        ms = (time.perf_counter() - t0) * 1000
+        if ms >= SLOW_REQUEST_MS:
+            who = (session.get("user") or {}).get("email", "-")
+            # request.path only — never full_path, which would leak the
+            # password-reset token from /reset?token=... into the logs.
+            print(f"[SLOW] {ms:.0f}ms {request.method} {request.path} "
+                  f"user={who} -> {resp.status_code}", flush=True)
+    return resp
+
 
 ROLES = ("HO_ADMIN", "ACCOUNTS", "SALES", "VIEWER")
 # Roles allowed to scan & upload cheques
@@ -50,11 +79,19 @@ def get_client():
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set.")
-        # Hard caps: the SDK default is 600s × multiple retries, which can park
-        # a worker thread (and its socket) for ~30 minutes. One attempt capped
-        # at 50s stays under nginx's 60s proxy_read_timeout, so a slow call
-        # surfaces as our clean 504 rather than nginx killing the connection.
-        _client = anthropic.Anthropic(api_key=api_key, timeout=50.0, max_retries=0)
+        # Explicit per-phase caps (the SDK default is 600s x several retries,
+        # which parks a worker thread and its socket for ~30 minutes):
+        #   connect 10s - upstream unreachable fails fast
+        #   read    50s - stays under nginx's 60s proxy_read_timeout, so a slow
+        #                 upstream surfaces as our clean 504, not an nginx kill
+        #   write   30s - uploading the cheque image
+        #   pool    10s - never queue behind a saturated connection pool
+        # max_retries=0 keeps one slow call to one slow call.
+        _client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=httpx.Timeout(connect=10.0, read=50.0, write=30.0, pool=10.0),
+            max_retries=0,
+        )
     return _client
 
 
@@ -88,17 +125,52 @@ def get_db():
         db_url(),
         connect_timeout=10,
         keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
-        options="-c statement_timeout=30000 -c idle_in_transaction_session_timeout=60000",
+        # idle_session_timeout (PG14+) reaps even a leaked connection after 5
+        # idle minutes. Set here rather than as a follow-up SET so each request
+        # costs one round trip less — every request opens a fresh connection.
+        options=("-c statement_timeout=30000 "
+                 "-c idle_in_transaction_session_timeout=60000 "
+                 "-c idle_session_timeout=300000"),
     )
-    # Server-side safety net (PG14+): even a leaked connection is reaped after
-    # 5 idle minutes. Ignored on older Postgres.
-    try:
-        with conn.cursor() as _c:
-            _c.execute("SET idle_session_timeout = '300s'")
-        conn.commit()
-    except Exception:
-        conn.rollback()
     return conn
+
+
+# Hot-path indexes. A FOREIGN KEY does NOT create an index in Postgres, so
+# cheque_events.cheque_id had none — and the dashboard runs two correlated
+# sub-queries against cheque_events FOR EVERY ROW (bounce count, re-deposit
+# check). Each was a sequential scan of a table that grows with every
+# lifecycle action, so page time crept up as the data grew: the slowness that
+# builds back up over days.
+HOT_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_events_cheque_action ON cheque_events (cheque_id, action)",
+    "CREATE INDEX IF NOT EXISTS ix_cheques_status ON cheques (status)",
+    "CREATE INDEX IF NOT EXISTS ix_cheques_due ON cheques (deposit_due_date)",
+    "CREATE INDEX IF NOT EXISTS ix_cheques_date ON cheques (cheque_date_iso)",
+    # Matches the accounts-scope predicate LOWER(TRIM(accounts_email)) = %s
+    "CREATE INDEX IF NOT EXISTS ix_cheques_accounts_email ON cheques (LOWER(TRIM(accounts_email)))",
+    "CREATE INDEX IF NOT EXISTS ix_changelog_entity ON change_log (entity_type, entity_id)",
+)
+
+
+def ensure_indexes():
+    """Create the hot-path indexes AFTER the schema migration has committed,
+    each in its own transaction. An index failure (or the harmless race when
+    both gunicorn workers boot at once) must never roll back the migration or
+    stop the app from starting."""
+    conn = get_db()
+    try:
+        for ddl in HOT_INDEXES:
+            cur = conn.cursor()
+            try:
+                cur.execute(ddl)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"[DB] index skipped: {str(e).strip()}", flush=True)
+            finally:
+                cur.close()
+    finally:
+        conn.close()
 
 
 def init_db():
@@ -297,6 +369,7 @@ def init_db():
         cur.close()
     finally:
         conn.close()
+    ensure_indexes()
 
 
 with app.app_context():
