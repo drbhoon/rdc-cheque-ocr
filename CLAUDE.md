@@ -126,6 +126,19 @@ Users reported the app getting slower over days until threads/sockets were clear
   `[SLOW] <ms> <method> <path> user=<email> -> <status>`. Check with
   `docker compose logs rdc-cheque-ocr-service | grep SLOW`. Logs `request.path` only —
   never `full_path`, which would leak the `/reset?token=…` reset token.
+- **Auto-recovery (the site went down twice on wedged workers)**: `restart: unless-stopped`
+  only fires when a process EXITS — a gunicorn that is alive but has every thread stuck is
+  invisible to it, so the site stayed down until someone intervened. Now: `/healthz`
+  (unauthenticated, deliberately does NOT touch the DB, so it fails precisely when no
+  worker thread is free) + a container `healthcheck` + `watchdog.sh` on host cron every
+  minute. Docker will NOT restart an unhealthy container by itself; the watchdog does. It
+  probes twice, appends evidence to `watchdog-diag.log` (container `ps -ef`, host socket
+  states, `pg_stat_activity`, last 80 log lines) and restarts ONLY the app container —
+  Postgres and its volume are untouched. Install: `chmod +x watchdog.sh` then
+  `* * * * * /home/developer/projects/rdc-pdc-app/watchdog.sh` in the developer crontab.
+- **Postgres reaps its own sessions**: `idle_session_timeout=5min` +
+  `idle_in_transaction_session_timeout=60s` are set on the SERVER (compose `command`), so
+  they apply to every connection regardless of what the client asked for.
 - **Not yet done**: the dashboard/export render *every* matching row (no pagination). If
   slowness returns after the indexes, page weight is the next thing to fix.
 
