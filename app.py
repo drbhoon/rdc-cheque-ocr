@@ -549,6 +549,30 @@ def log_change(entity_type, entity_id, field, old, new, reason=None):
         conn.close()
 
 
+@app.route("/healthz")
+def healthz():
+    """Container healthcheck / watchdog probe. Deliberately does NOT touch the
+    database: the failure we need to catch is gunicorn having no free thread to
+    serve a request (a wedged worker stays alive, so Docker's restart policy
+    never fires on its own). If every thread is stuck this never answers, the
+    healthcheck times out, and the watchdog restarts the app.
+    Pass ?db=1 for a manual deep check that also pings Postgres."""
+    if request.args.get("db") == "1":
+        try:
+            conn = get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                cur.close()
+            finally:
+                conn.close()
+        except Exception as e:
+            return jsonify({"ok": False, "db": False, "error": str(e)[:200]}), 503
+        return jsonify({"ok": True, "db": True}), 200
+    return jsonify({"ok": True}), 200
+
+
 # ── Routes: auth ──────────────────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
