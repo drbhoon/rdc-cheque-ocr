@@ -119,7 +119,8 @@ Users reported the app getting slower over days until threads/sockets were clear
   check). Those were sequential scans of a table that grows with every lifecycle action, so
   page time crept up as data accumulated. Indexes are created after the migration commits,
   each in its own guarded transaction, so a failure (or the two-worker boot race) can never
-  roll back the migration or stop startup.
+  roll back the migration or stop startup. A `pg_try_advisory_lock` means only one
+  gunicorn worker creates them; the other skips, so the boot log stays clean.
 - **gunicorn**: `--timeout 120`, `--graceful-timeout 30`, `--max-requests 800` (+jitter) as
   the second line of defence.
 - **Slow-request log**: anything over `SLOW_REQUEST_MS` (default 3000) prints
