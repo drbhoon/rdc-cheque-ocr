@@ -1,7 +1,10 @@
 flask>=3.0.0
 gunicorn>=21.2.0
 werkzeug>=3.0.0
-anthropic>=0.94.0
+# PINNED: an unpinned rebuild pulled anthropic 1.x, which switched its HTTP
+# backend httpx -> httpx2 and broke every scan (2026-09-22). Bump this
+# deliberately and test a scan afterwards - never let a rebuild decide.
+anthropic==1.7.0
 python-dotenv>=1.0.0
 psycopg2-binary>=2.9.0
 openpyxl>=3.1.0
