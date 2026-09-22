@@ -976,21 +976,30 @@ def predict():
         # the model just returned something unreadable. No client reset needed.
         return jsonify({"error": "Could not read this file. Please upload a clear photo "
                                  "(JPG/PNG) or a single-page PDF of the cheque and try again."}), 422
-    except anthropic.APITimeoutError:
+    except anthropic.APITimeoutError as e:
         # Client disconnected / call stalled — tear down the socket pool so no
         # dormant connection lingers, then rebuild on the next request.
+        print(f"[AI] timeout: {e!r} cause={getattr(e, '__cause__', None)!r}", flush=True)
         reset_client()
         return jsonify({"error": "Cheque reading took too long and was stopped after 50 "
                                  "seconds — the AI service may be busy. Please try again."}), 504
-    except anthropic.APIConnectionError:
+    except anthropic.APIConnectionError as e:
+        # Never reached the API at all: DNS, egress firewall, proxy or TLS.
+        # Log the underlying httpx cause — without it the server keeps no record
+        # of WHY, and this is the only place that detail exists.
+        print(f"[AI] connection error: {e!r} cause={getattr(e, '__cause__', None)!r}",
+              flush=True)
         reset_client()
         return jsonify({"error": "Could not reach the AI service. Check the server's "
                                  "internet connection and try again."}), 502
     except Exception as e:
-        # Any other failure: close the AI socket pool defensively before returning.
-        reset_client()
+        # Any other failure (auth, credits, bad request): close the AI socket
+        # pool defensively. The traceback goes to the log, not the browser.
         import traceback
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        print(f"[AI] failed: {type(e).__name__}: {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        reset_client()
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 # ── Routes: staff master ─────────────────────────────────────────────────────
