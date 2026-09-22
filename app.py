@@ -16,7 +16,7 @@ from flask import (Flask, request, jsonify, render_template, send_file,
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 import anthropic
-import httpx   # ships with the anthropic SDK; used for explicit timeouts
+import importlib
 
 load_dotenv()
 
@@ -73,6 +73,26 @@ _client = None
 
 # ── Anthropic client ────────────────────────────────────────────────────────
 
+def _ai_timeout_candidates():
+    """Timeout objects to try, best first.
+
+    The Anthropic SDK has moved its HTTP backend between `httpx` and `httpx2`,
+    and passing the Timeout class from the wrong one is rejected outright
+    ("Invalid `timeout` argument"). Which package is correct therefore depends
+    on the installed SDK version, and an unpinned rebuild can flip it — which
+    is exactly how this broke in production. So offer both and end with a plain
+    float, which every version accepts (losing only per-phase granularity)."""
+    out = []
+    for mod_name in ("httpx2", "httpx"):
+        try:
+            mod = importlib.import_module(mod_name)
+            out.append(mod.Timeout(connect=10.0, read=50.0, write=30.0, pool=10.0))
+        except Exception:
+            pass
+    out.append(50.0)
+    return out
+
+
 def get_client():
     global _client
     if _client is None:
@@ -87,11 +107,20 @@ def get_client():
         #   write   30s - uploading the cheque image
         #   pool    10s - never queue behind a saturated connection pool
         # max_retries=0 keeps one slow call to one slow call.
-        _client = anthropic.Anthropic(
-            api_key=api_key,
-            timeout=httpx.Timeout(connect=10.0, read=50.0, write=30.0, pool=10.0),
-            max_retries=0,
-        )
+        last_err = None
+        for tmo in _ai_timeout_candidates():
+            try:
+                _client = anthropic.Anthropic(api_key=api_key, timeout=tmo, max_retries=0)
+                break
+            except TypeError as e:      # wrong Timeout class for this SDK build
+                last_err = e
+                _client = None
+        if _client is None:
+            raise last_err
+        # One line per worker: which SDK build and which timeout form won, so a
+        # future backend switch is visible in the log instead of a 500 in the UI.
+        print(f"[AI] anthropic {getattr(anthropic, '__version__', '?')} client ready "
+              f"(timeout={type(tmo).__module__}.{type(tmo).__name__})", flush=True)
     return _client
 
 
