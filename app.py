@@ -181,13 +181,29 @@ HOT_INDEXES = (
 )
 
 
+# Arbitrary but fixed key for the advisory lock that serialises index creation.
+INDEX_LOCK_ID = 872001
+
+
 def ensure_indexes():
     """Create the hot-path indexes AFTER the schema migration has committed,
-    each in its own transaction. An index failure (or the harmless race when
-    both gunicorn workers boot at once) must never roll back the migration or
-    stop the app from starting."""
+    each in its own transaction. An index failure must never roll back the
+    migration or stop the app from starting.
+
+    Both gunicorn workers boot at once, and CREATE INDEX IF NOT EXISTS is not
+    atomic across sessions: both see "not exists", both create, one loses with a
+    confusing 'duplicate key ... pg_class' error. A try-advisory-lock means the
+    worker that gets it does the work and the other simply skips — the indexes
+    are identical either way, and the log stays clean."""
     conn = get_db()
     try:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (INDEX_LOCK_ID,))
+        got_lock = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        if not got_lock:
+            return          # the other worker is creating them right now
         for ddl in HOT_INDEXES:
             cur = conn.cursor()
             try:
@@ -2314,7 +2330,7 @@ def export():
     ws.title = "Cheques"
 
     HEADERS = [
-        "#", "Bank", "Account No", "Cheque No",
+        "Cheque ID", "Bank", "Account No", "Cheque No",
         "Cheque Date", "Expiry Date", "Pay To", "Amount (Words)",
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
@@ -2347,7 +2363,7 @@ def export():
             if shade:
                 c.fill = shade
 
-    widths = [6, 16, 16, 11, 12, 12, 20, 26, 14, 13, 18, 13,
+    widths = [10, 16, 16, 11, 12, 12, 20, 26, 14, 13, 18, 13,
               12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
