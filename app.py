@@ -278,6 +278,12 @@ def init_db():
             ("emp_code",          "TEXT"),   # uploader's employee code (from staff_master)
             ("cust_code",         "TEXT"),   # optional ERP customer code
             # Returned to customer without being banked (fresh cheque / online transfer)
+            # Archive: settled/handed-off cheques leave the dashboard but stay
+            # searchable. Kept as a flag, NOT a status, so the cheque keeps its
+            # real status (Bounced, Pending, ...) for history and reporting.
+            ("archived_at",       "TIMESTAMPTZ"),
+            ("archive_reason",    "TEXT"),
+            ("archived_by",       "TEXT"),
             ("returned_date",     "DATE"),
             ("return_mode",       "TEXT"),
             ("return_reference",  "TEXT"),
@@ -1602,7 +1608,7 @@ def _fetch_pending():
                    (SELECT COUNT(*) FROM cheque_events e
                     WHERE e.cheque_id = cheques.id AND e.action = 'BOUNCED') AS bounce_count
             FROM cheques
-            WHERE status IN ('PENDING','BOUNCED','LEGAL'){scope_and}
+            WHERE archived_at IS NULL AND status IN ('PENDING','BOUNCED','LEGAL'){scope_and}
             ORDER BY deposit_due_date NULLS LAST, id
             """,
             scope_params,
@@ -1664,6 +1670,7 @@ DASH_COLS = [
     "amount_numbers", "amount_value", "cheque_date_iso", "deposit_due_date",
     "status", "sales_name", "location", "plant", "bh_name", "cheque_location",
     "deposited_date", "cleared_date", "emp_code", "cust_code",
+    "archived_at", "archive_reason",
 ]
 
 # Filter token -> human label (order shown in the UI)
@@ -1679,10 +1686,25 @@ DASH_FILTERS = [
     ("rtgs",       "RTGS-settled"),
     ("returned",   "Returned"),
     ("closed",     "Closed"),
+    ("archived",   "Archived"),
     ("security",   "Security"),
 ]
 
 ACTIVE_STATUSES = ("PENDING", "BOUNCED", "LEGAL", "DEPOSITED")
+
+# Why a cheque left the dashboard. Bounced cheques get their own list because
+# the outcomes differ; both are offered from the one Archive action.
+ARCHIVE_REASONS_BOUNCED = [
+    "Payment Received Online against the cheque",
+    "Legal Case File Against the Customer",
+    "Revised Cheque Received against Old Cheque",
+]
+ARCHIVE_REASONS_OPEN = [
+    "Revised Cheque Received against Old Cheque",
+    "Payment Received Online against the cheque",
+    "O/S showing is Nil",
+]
+ARCHIVE_REASONS = sorted(set(ARCHIVE_REASONS_BOUNCED) | set(ARCHIVE_REASONS_OPEN))
 
 FRIENDLY_STATUS = {"DEPOSITED": "Deposited", "CLEARED": "Cleared", "BOUNCED": "Bounced",
                    "LEGAL": "Legal", "RTGS_SETTLED": "RTGS-Settled", "CLOSED": "Closed",
@@ -1725,6 +1747,13 @@ def cheque_filters(today):
     today_m90 = today - timedelta(days=90)
     EXPIRED_SQL = "status = 'PENDING' AND cheque_date_iso IS NOT NULL AND cheque_date_iso < %s"
     NOT_EXPIRED = "(cheque_date_iso IS NULL OR cheque_date_iso >= %s)"
+
+    # Archived cheques are out of sight by default; the Archived tab shows only
+    # them, and searching still works inside it.
+    if f_status == "archived":
+        where.append("archived_at IS NOT NULL")
+    else:
+        where.append("archived_at IS NULL")
 
     status_map = {"bounced": "BOUNCED", "cleared": "CLEARED", "legal": "LEGAL",
                   "rtgs": "RTGS_SETTLED", "closed": "CLOSED", "security": "SECURITY",
@@ -1796,6 +1825,11 @@ def dashboard():
     scope_where, scope_params, scope_locked = accounts_scope()
     scope_and = ("".join(" AND " + w for w in scope_where))
     scope_only_sql = ("WHERE " + " AND ".join(scope_where)) if scope_where else ""
+    # Cards and filter dropdowns describe LIVE cheques only — archived ones are
+    # counted separately on their own card.
+    live_where = scope_where + ["archived_at IS NULL"]
+    live_and = "".join(" AND " + w for w in live_where)
+    live_only_sql = "WHERE " + " AND ".join(live_where)
 
     where, params = cheque_filters(today)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
@@ -1821,7 +1855,7 @@ def dashboard():
 
         # Summary across ALL cheques (unfiltered), by status
         cur.execute(f"SELECT status, COUNT(*), COALESCE(SUM(amount_value),0) "
-                    f"FROM cheques {scope_only_sql} GROUP BY status", scope_params)
+                    f"FROM cheques {live_only_sql} GROUP BY status", scope_params)
         summary = {s: {"count": c, "amount": float(a)} for s, c, a in cur.fetchall()}
         # Real totals (only true statuses — before adding derived overlays)
         all_count = sum(v["count"] for v in summary.values())
@@ -1829,7 +1863,7 @@ def dashboard():
 
         # Split DEPOSITED into first-time deposits vs re-deposited (status DEPOSITED + event)
         cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
-                    f"WHERE status='DEPOSITED' AND {REDEP_EXISTS}{scope_and}", scope_params)
+                    f"WHERE status='DEPOSITED' AND {REDEP_EXISTS}{live_and}", scope_params)
         rc, ra = cur.fetchone()
         summary["REDEP"] = {"count": rc, "amount": float(ra)}
         if "DEPOSITED" in summary:
@@ -1838,9 +1872,14 @@ def dashboard():
         # Derived expired count: PENDING whose 90-day validity has lapsed
         cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
                     f"WHERE status = 'PENDING' AND cheque_date_iso IS NOT NULL "
-                    f"AND cheque_date_iso < %s{scope_and}", [today_m90] + scope_params)
+                    f"AND cheque_date_iso < %s{live_and}", [today_m90] + scope_params)
         oc, oa = cur.fetchone()
         summary["EXPIRED"] = {"count": oc, "amount": float(oa)}
+        # Archived: out of the working view, still counted and searchable
+        cur.execute(f"SELECT COUNT(*), COALESCE(SUM(amount_value),0) FROM cheques "
+                    f"WHERE archived_at IS NOT NULL{scope_and}", scope_params)
+        ac, aa = cur.fetchone()
+        summary["ARCHIVED"] = {"count": ac, "amount": float(aa)}
         # Keep Pending and Expired mutually exclusive (Expired is a subset of PENDING)
         if "PENDING" in summary:
             summary["PENDING"] = {"count": summary["PENDING"]["count"] - oc,
@@ -1848,13 +1887,13 @@ def dashboard():
 
         # Filter dropdown options
         cur.execute(f"SELECT DISTINCT sales_name FROM cheques "
-                    f"WHERE sales_name IS NOT NULL{scope_and} ORDER BY 1", scope_params)
+                    f"WHERE sales_name IS NOT NULL{live_and} ORDER BY 1", scope_params)
         sales_opts = [r[0] for r in cur.fetchall()]
         cur.execute(f"SELECT DISTINCT location FROM cheques "
-                    f"WHERE location IS NOT NULL{scope_and} ORDER BY 1", scope_params)
+                    f"WHERE location IS NOT NULL{live_and} ORDER BY 1", scope_params)
         loc_opts = [r[0] for r in cur.fetchall()]
         cur.execute(f"SELECT DISTINCT plant FROM cheques "
-                    f"WHERE plant IS NOT NULL{scope_and} ORDER BY 1", scope_params)
+                    f"WHERE plant IS NOT NULL{live_and} ORDER BY 1", scope_params)
         plant_opts = [r[0] for r in cur.fetchall()]
         # Accounts-incharge dropdown (admins / viewers only — ACCOUNTS is locked)
         acct_opts = []
@@ -1882,6 +1921,8 @@ def dashboard():
         total_amount=total_amount, today=today.isoformat(), locations=CHEQUE_LOCATIONS,
         acct_opts=acct_opts, sel_acct=f_acct, scope_locked=scope_locked,
         scope_email=(current_user() or {}).get("email"),
+        archive_reasons_bounced=ARCHIVE_REASONS_BOUNCED,
+        archive_reasons_open=ARCHIVE_REASONS_OPEN,
     )
 
 
@@ -1993,6 +2034,74 @@ def mark_close(cid):
                        reason=reason, remarks=rem,
                        extra_sql="closed_date=%s, closed_by=%s, close_reason=%s",
                        extra_vals=(cdate, who, reason))
+
+
+@app.route("/cheque/<int:cid>/archive", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def archive_cheque(cid):
+    """Settled or handed off — take it off the working dashboard but keep it
+    fully searchable under Archived. The cheque KEEPS its status (Bounced stays
+    Bounced); only the archive flag changes, so history stays truthful.
+    Archived cheques are excluded from the action list and from reminders."""
+    d = request.get_json(silent=True) or {}
+    reason = (d.get("reason") or "").strip()
+    rem    = (d.get("remarks") or "").strip() or None
+    if reason not in ARCHIVE_REASONS:
+        return jsonify({"error": "A reason is required.",
+                        "allowed": ARCHIVE_REASONS}), 400
+    who = (current_user() or {}).get("email")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT archived_at FROM cheques WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        if row[0] is not None:
+            cur.close()
+            return jsonify({"error": "This cheque is already archived."}), 400
+        cur.execute("UPDATE cheques SET archived_at=NOW(), archive_reason=%s, "
+                    "archived_by=%s, updated_at=NOW() WHERE id=%s", (reason, who, cid))
+        cur.execute("INSERT INTO cheque_events "
+                    "(cheque_id, action, action_date, reason, remarks, done_by) "
+                    "VALUES (%s,'ARCHIVED',CURRENT_DATE,%s,%s,%s)", (cid, reason, rem, who))
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "archived": True})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/cheque/<int:cid>/unarchive", methods=["POST"])
+@role_required("HO_ADMIN")
+def unarchive_cheque(cid):
+    """Put a cheque archived by mistake back on the dashboard (HO Admin only)."""
+    rem = ((request.get_json(silent=True) or {}).get("remarks") or "").strip() or None
+    who = (current_user() or {}).get("email")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE cheques SET archived_at=NULL, archive_reason=NULL, "
+                    "archived_by=NULL, updated_at=NOW() WHERE id=%s AND archived_at IS NOT NULL",
+                    (cid,))
+        if cur.rowcount == 0:
+            cur.close()
+            return jsonify({"error": "Cheque not found, or it is not archived."}), 404
+        cur.execute("INSERT INTO cheque_events "
+                    "(cheque_id, action, action_date, remarks, done_by) "
+                    "VALUES (%s,'UNARCHIVED',CURRENT_DATE,%s,%s)", (cid, rem, who))
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "archived": False})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/cheque/<int:cid>/override", methods=["POST"])
@@ -2217,7 +2326,8 @@ def _open_reminder_rows():
             f"""
             SELECT {', '.join(REMINDER_COLS)}
             FROM cheques
-            WHERE status IN ('PENDING','BOUNCED','LEGAL')
+            WHERE archived_at IS NULL
+              AND status IN ('PENDING','BOUNCED','LEGAL')
               AND (status IN ('BOUNCED','LEGAL') OR deposit_due_date <= %s)
             ORDER BY deposit_due_date NULLS LAST, id
             """,
@@ -2424,7 +2534,8 @@ def export():
             "cheque_date_iso", "payee", "amount_words", "amount_numbers",
             "amount_value", "issuer_name", "status", "deposited_date", "deposit_bank",
             "deposit_reference", "cleared_date", "bounce_date", "bounce_reason",
-            "returned_date", "return_mode", "return_reference", "cheque_location",
+            "returned_date", "return_mode", "return_reference",
+            "archived_at", "archive_reason", "cheque_location",
             "sales_name", "sales_email", "location", "plant",
             "accounts_email", "accounts_name", "bh_name"]
 
@@ -2467,7 +2578,7 @@ def export():
             r["deposited_date"], r["deposit_bank"], r["deposit_reference"],
             r["cleared_date"], r["bounce_date"], r["bounce_reason"],
             r["returned_date"], r["return_mode"], r["return_reference"],
-            r["cheque_location"], r["sales_name"], r["sales_email"], r["location"],
+            r["archived_at"], r["archive_reason"], r["cheque_location"], r["sales_name"], r["sales_email"], r["location"],
             r["plant"],
             r["accounts_name"] or r["acct_name_lookup"], r["accounts_email"],
             r["bh_name"], r["scanned_ist"],
@@ -2483,11 +2594,12 @@ def export():
         "Amount (text)", "Amount (₹)", "Issuer", "Status",
         "Deposited On", "Deposit Bank", "Deposit Ref",
         "Cleared On", "Bounced On", "Bounce Reason",
-        "Returned On", "Return Mode", "Return Ref", "Cheque Location",
+        "Returned On", "Return Mode", "Return Ref",
+        "Archived On", "Archive Reason", "Cheque Location",
         "Sales Name", "Sales Email", "Location", "Plant",
         "Accounts Name", "Accounts Email", "BH Name", "Scanned At (IST)",
     ]
-    assert len(HEADERS) == 30
+    assert len(HEADERS) == 32
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
     hdr_fill  = PatternFill("solid", fgColor="4F46E5")
@@ -2513,7 +2625,8 @@ def export():
                 c.fill = shade
 
     widths = [10, 16, 16, 11, 12, 12, 20, 26, 14, 13, 18, 13,
-              12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 24, 18, 20]
+              12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 34,
+              14, 18, 22, 14, 12, 18, 24, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"

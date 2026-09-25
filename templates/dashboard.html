@@ -30,6 +30,7 @@
     .c-deposited .dotc{background:#22d3ee}.c-bounced .dotc{background:#f87171}.c-redeposited .dotc{background:#93b0ff}
     .c-cleared .dotc{background:#4ade80}.c-legal .dotc{background:#a855f7}.c-rtgs .dotc{background:#5eead4}.c-closed .dotc{background:#6b7280}
     .c-security .dotc{background:#eab308}.c-returned .dotc{background:#f97316}
+    .c-archived .dotc{background:#64748b}
 
     /* Filter bar */
     form.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #161922; border: 1px solid #2d3148; border-radius: 10px; padding: 14px; margin-bottom: 20px; }
@@ -62,6 +63,7 @@
     .act.deposit{color:#4ade80}.act.bounce{color:#fca5a5}.act.redeposit{color:#93b0ff}.act.clear{color:#86efac}
     .act.legal{color:#d8b4fe}.act.rtgs{color:#5eead4}.act.close{color:#fbbf24}.act.override{color:#f59e0b}
     .act.del{color:#f87171}.act.del:hover{border-color:#f87171}.act.ret{color:#fdba74}
+    .act.arch{color:#94a3b8}.act.unarch{color:#7dd3fc}
 
     .empty { padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
     .tablewrap { overflow-x: auto; }
@@ -105,8 +107,8 @@
       </div>
     </div>
 
-    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('returned','Returned'),('closed','Closed'),('security','Security')] %}
-    {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','returned':'RETURNED','closed':'CLOSED','security':'SECURITY'} %}
+    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('returned','Returned'),('closed','Closed'),('archived','Archived'),('security','Security')] %}
+    {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','returned':'RETURNED','closed':'CLOSED','archived':'ARCHIVED','security':'SECURITY'} %}
     <div class="cards">
       {% for token, label in order %}
       {% set k = keymap[token] %}
@@ -183,7 +185,8 @@
           <td>{{ r.sales_name or '—' }}<div class="muted">{{ r.plant or '' }}{% if r.location %} · {{ r.location }}{% endif %}</div></td>
           <td class="amount">{{ '{:,.0f}'.format(r.amount_value) if r.amount_value is not none else (r.amount_numbers or '—') }}</td>
           <td>{{ r.cheque_location or '—' }}</td>
-          <td><span class="badge {{ r.status }}">{{ r.status.replace('_',' ') }}</span>{% if r.bounce_count and r.bounce_count > 1 %}<span class="bounce-n">×{{ r.bounce_count }}</span>{% endif %}</td>
+          <td><span class="badge {{ r.status }}">{{ r.status.replace('_',' ') }}</span>{% if r.bounce_count and r.bounce_count > 1 %}<span class="bounce-n">×{{ r.bounce_count }}</span>{% endif %}
+            {% if r.archived_at %}<div class="muted" title="{{ r.archive_reason }}">🗄 {{ r.archive_reason }}</div>{% endif %}</td>
           <td>
             <div class="actions">
               {% if r.status == 'PENDING' %}
@@ -201,6 +204,14 @@
               {% elif r.status == 'LEGAL' %}
                 <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
                 <button class="act close" onclick="openModal('close',{{ r.id }})">Close</button>
+              {% endif %}
+              {% if r.archived_at %}
+                {% if user and user.role == 'HO_ADMIN' %}
+                <button class="act unarch" onclick="unarchiveCheque({{ r.id }})">↩ Restore</button>
+                {% endif %}
+              {% else %}
+                <button class="act arch" data-status="{{ r.status }}"
+                  onclick="openArchive({{ r.id }}, this.dataset.status)">🗄 Archive</button>
               {% endif %}
               <button class="act" onclick="showHistory({{ r.id }})">History</button>
               {% if user and user.role == 'HO_ADMIN' %}
@@ -246,6 +257,33 @@
     const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
 
     function setStatus(token){ document.getElementById('f-status').value = token; document.getElementById('filterForm').submit(); }
+
+    const ARCHIVE_REASONS_BOUNCED = {{ archive_reasons_bounced|tojson }};
+    const ARCHIVE_REASONS_OPEN     = {{ archive_reasons_open|tojson }};
+
+    function openArchive(id, status){
+      current = { action:'archive', id };
+      confirmBtn.style.display='';
+      document.getElementById('modalTitle').textContent = 'Archive Cheque';
+      const list = (status === 'BOUNCED') ? ARCHIVE_REASONS_BOUNCED : ARCHIVE_REASONS_OPEN;
+      document.getElementById('modalFields').innerHTML =
+        `<label>Reason</label><select id="m-areason">` +
+        list.map(r => `<option value="${r}">${r}</option>`).join('') +
+        `</select>` + REMARKS +
+        `<div class="req-note">It leaves the dashboard and stops appearing in reminders, but stays searchable under <b>Archived</b>. HO Admin can restore it.</div>`;
+      document.getElementById('modalBg').classList.add('show');
+    }
+
+    async function unarchiveCheque(id){
+      if(!confirm('Put this cheque back on the dashboard?')) return;
+      try{
+        const res = await fetch(`/cheque/${id}/unarchive`, {method:'POST',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+        const d = await res.json();
+        if(d.success){ showToast('✓ Restored'); setTimeout(()=>location.reload(), 700); }
+        else showToast('⚠ '+(d.error||'Failed'), true);
+      }catch{ showToast('⚠ Network error', true); }
+    }
 
     async function editCustCode(id, cur){
       const v = prompt('ERP Customer Code (leave blank to clear):', cur || '');
@@ -374,7 +412,8 @@
       } else {
         url = `/cheque/${id}/${action}`;
         body = { date: document.getElementById('m-date')?.value, remarks: document.getElementById('m-remarks')?.value };
-        if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
+        if(action === 'archive'){ body.reason = document.getElementById('m-areason')?.value; }
+        else if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
         else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
         else if(action === 'return'){ body.mode = document.getElementById('m-mode')?.value; body.reference = document.getElementById('m-ref')?.value; }
         else if(action === 'rtgs'){ body.reference = document.getElementById('m-ref')?.value; body.amount = document.getElementById('m-amount')?.value; }
