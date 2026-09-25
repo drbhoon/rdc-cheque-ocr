@@ -44,6 +44,11 @@ login, password) · company logo at `static/rdc-logo.jpg` on every page header.
   covering several locations list them comma-separated in LOCATION.
 - **Uploader gate**: nobody can save cheques unless their login email is in the
   employee master (emp_code stamped on every cheque as `cheques.emp_code`).
+- **Routing gate**: `/accept` refuses a save with no Accounts incharge or no Business
+  Head (400 `missing_routing`, mirrored client-side). A cheque with a blank
+  `accounts_email` reaches nobody's dashboard and no reminder digest, so it can never
+  be chased — that is how ~189 orphan cheques accumulated before this gate existed.
+  `accounts_name` is now snapshotted next to `accounts_email`, as `bh_name` always was.
   Optional ERP `cust_code` entered at scan or set later from dashboard (audited).
 - **Pairing audit** (`pairing_warnings()`): runs on every Staff page load + upload;
   sticky amber box lists locations with missing/duplicate ACCOUNTS or BH.

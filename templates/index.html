@@ -238,6 +238,7 @@
       { key:'sales_email',    label:'Sales Email' },
       { key:'location',       label:'Location' },
       { key:'plant',          label:'Plant' },
+      { key:'accounts_name',  label:'Accounts Incharge' },
       { key:'accounts_email', label:'Accounts Email' },
       { key:'bh_name',        label:'Branch Head' },
       { key:'bh_email',       label:'BH Email' },
@@ -388,6 +389,7 @@
         $('f-sales_email').value    = s.email||'';
         $('f-location').value       = s.location||'';
         $('f-plant').value          = s.plant||'';
+        $('f-accounts_name').value  = acc.emp_name||'';
         $('f-accounts_email').value = acc.email||'';
         $('f-bh_name').value        = bh.emp_name||'';
         $('f-bh_email').value       = bh.email||'';
@@ -450,6 +452,15 @@
         showToast('⚠ You are not linked to an Employee Code in the Staff Master — ask HO Admin to add you.',true);
         return;
       }
+      // Routing is mandatory — a cheque with no Accounts incharge never reaches
+      // anyone's dashboard or reminder digest.
+      const missing = [];
+      if(!($('f-accounts_email')?.value||'').trim()) missing.push('Accounts incharge');
+      if(!($('f-bh_name')?.value||'').trim())        missing.push('Business Head');
+      if(missing.length){
+        showToast('⚠ Cannot save without '+missing.join(' and ')+'. Pick the Sales Person to fill these in, or ask HO Admin to add the pair for this location.', true);
+        return;
+      }
       const payload={};
       CHEQUE_FIELDS.forEach(f=> payload[f.key]=$('f-'+f.key)?.value?.trim()||null);
       const sec = $('f-is_security')?.checked || false;
@@ -478,6 +489,9 @@
         if(res.status===409){ showToast('⚠ '+(data.message||'Duplicate cheque — already recorded.'),true);
           acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }
         if(res.status===403){ showToast('⚠ '+(data.message||'Not permitted.'),true);
+          acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }
+        if(res.status===400 && data.error==='missing_routing'){
+          showToast('⚠ '+data.message, true);
           acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }
         if(data.success){ showToast('✓ Saved! Ready for next cheque.',false); resetAll(); }
         else { showToast('⚠ Save failed: '+(data.error||'Unknown'),true);

@@ -257,6 +257,7 @@ def init_db():
             ("location",          "TEXT"),
             ("plant",             "TEXT"),
             ("accounts_email",    "TEXT"),
+            ("accounts_name",     "TEXT"),
             ("bh_name",           "TEXT"),
             ("bh_email",          "TEXT"),
             ("cheque_location",   "TEXT DEFAULT 'Customer'"),
@@ -1318,6 +1319,23 @@ def accept():
         }), 403
     cust_code = (data.get("cust_code") or "").strip() or None
 
+    # Routing is mandatory: a cheque with no Accounts incharge is invisible to
+    # that person's dashboard and to the reminder digests — it can never be
+    # chased. Refuse the save rather than create an orphan record.
+    missing = []
+    if not (data.get("accounts_email") or "").strip():
+        missing.append("Accounts incharge")
+    if not (data.get("bh_name") or "").strip():
+        missing.append("Business Head")
+    if missing:
+        return jsonify({
+            "error": "missing_routing",
+            "message": ("Cannot save without " + " and ".join(missing) + ". "
+                        "Pick the Sales Person to fill these automatically — if they "
+                        "stay blank, that location has no pair in the Staff Master, so "
+                        "ask HO Admin to add one."),
+        }), 400
+
     account_number = (data.get("account_number") or "").strip() or None
     cheque_number  = (data.get("cheque_number") or "").strip() or None
 
@@ -1354,9 +1372,9 @@ def accept():
                 (bank_name, account_number, cheque_number, cheque_date, cheque_date_iso,
                  deposit_due_date, payee, amount_words, amount_numbers, amount_value,
                  issuer_name, status, sales_name, sales_email, location, plant,
-                 accounts_email, bh_name, bh_email, cheque_location, created_by,
-                 emp_code, cust_code, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                 accounts_email, accounts_name, bh_name, bh_email, cheque_location,
+                 created_by, emp_code, cust_code, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
             RETURNING id
             """,
             (
@@ -1365,7 +1383,8 @@ def accept():
                 data.get("payee"), data.get("amount_words"), data.get("amount_numbers"),
                 amount_value, data.get("issuer_name"), status,
                 data.get("sales_name"), data.get("sales_email"), data.get("location"),
-                data.get("plant"), data.get("accounts_email"), data.get("bh_name"),
+                data.get("plant"), data.get("accounts_email"), data.get("accounts_name"),
+                data.get("bh_name"),
                 data.get("bh_email"), data.get("cheque_location") or "Customer", created_by,
                 emp_code, cust_code,
             ),
@@ -2288,7 +2307,8 @@ def export():
             "amount_value", "issuer_name", "status", "deposited_date", "deposit_bank",
             "deposit_reference", "cleared_date", "bounce_date", "bounce_reason",
             "returned_date", "return_mode", "return_reference", "cheque_location",
-            "sales_name", "sales_email", "location", "plant", "bh_name"]
+            "sales_name", "sales_email", "location", "plant",
+            "accounts_email", "accounts_name", "bh_name"]
 
     conn = get_db()
     try:
@@ -2296,6 +2316,13 @@ def export():
         cur.execute(
             f"""
             SELECT {', '.join(COLS)},
+                   -- Cheques saved before accounts_name existed only carry the
+                   -- email; look the name up so old rows are readable too. A
+                   -- scalar sub-query (not a join) so a duplicate email in the
+                   -- employee master can never duplicate a cheque row.
+                   (SELECT e.emp_name FROM employees e
+                     WHERE LOWER(TRIM(e.email)) = LOWER(TRIM(cheques.accounts_email))
+                       AND UPPER(TRIM(e.role)) = 'ACCOUNTS' LIMIT 1),
                    TO_CHAR(scanned_at AT TIME ZONE 'Asia/Kolkata', 'DD/MM/YYYY HH24:MI')
             FROM cheques
             {where_sql}
@@ -2303,7 +2330,8 @@ def export():
             """,
             params,
         )
-        rows = [dict(zip(COLS + ["scanned_ist"], r)) for r in cur.fetchall()]
+        rows = [dict(zip(COLS + ["acct_name_lookup", "scanned_ist"], r))
+                for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
@@ -2322,7 +2350,9 @@ def export():
             r["cleared_date"], r["bounce_date"], r["bounce_reason"],
             r["returned_date"], r["return_mode"], r["return_reference"],
             r["cheque_location"], r["sales_name"], r["sales_email"], r["location"],
-            r["plant"], r["bh_name"], r["scanned_ist"],
+            r["plant"],
+            r["accounts_name"] or r["acct_name_lookup"], r["accounts_email"],
+            r["bh_name"], r["scanned_ist"],
         ])
 
     wb = openpyxl.Workbook()
@@ -2336,9 +2366,10 @@ def export():
         "Deposited On", "Deposit Bank", "Deposit Ref",
         "Cleared On", "Bounced On", "Bounce Reason",
         "Returned On", "Return Mode", "Return Ref", "Cheque Location",
-        "Sales Name", "Sales Email", "Location", "Plant", "BH Name", "Scanned At (IST)",
+        "Sales Name", "Sales Email", "Location", "Plant",
+        "Accounts Name", "Accounts Email", "BH Name", "Scanned At (IST)",
     ]
-    assert len(HEADERS) == 28
+    assert len(HEADERS) == 30
 
     hdr_font  = Font(bold=True, color="FFFFFF", size=11)
     hdr_fill  = PatternFill("solid", fgColor="4F46E5")
@@ -2364,7 +2395,7 @@ def export():
                 c.fill = shade
 
     widths = [10, 16, 16, 11, 12, 12, 20, 26, 14, 13, 18, 13,
-              12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 20]
+              12, 16, 14, 11, 11, 20, 12, 16, 16, 14, 18, 22, 14, 12, 18, 24, 18, 20]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
