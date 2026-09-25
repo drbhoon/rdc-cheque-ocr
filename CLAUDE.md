@@ -49,6 +49,13 @@ login, password) · company logo at `static/rdc-logo.jpg` on every page header.
   `accounts_email` reaches nobody's dashboard and no reminder digest, so it can never
   be chased — that is how ~189 orphan cheques accumulated before this gate existed.
   `accounts_name` is now snapshotted next to `accounts_email`, as `bh_name` always was.
+- **Routing re-sync** (`resync_routing()`, auto after every Staff Master upload + a
+  "↻ Re-sync routing" button): fills cheques whose Accounts/BH is **blank**, resolving by
+  the cheque's own location, else the location of whoever scanned it (emp_code, else
+  created_by). It **never overwrites** a cheque that already names someone — a staff
+  handover does not retroactively move cheques (user decision 2026-09-25), so after a
+  handover the predecessor keeps the old cheques and the successor sees only new ones.
+  Every filled field is written to `change_log`.
   Optional ERP `cust_code` entered at scan or set later from dashboard (audited).
 - **Pairing audit** (`pairing_warnings()`): runs on every Staff page load + upload;
   sticky amber box lists locations with missing/duplicate ACCOUNTS or BH.

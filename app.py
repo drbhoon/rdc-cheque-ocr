@@ -1082,6 +1082,105 @@ def emp_code_for(email):
     return code or None
 
 
+def _routing_maps(cur):
+    """location(lowercased) -> (name, email) for ACCOUNTS and for BH/RM, plus
+    emp_code/email -> location so a cheque with no location of its own can fall
+    back to wherever the person who scanned it works."""
+    cur.execute("SELECT emp_code, emp_name, role, email, location FROM employees")
+    acc, bh, loc_by_code, loc_by_email = {}, {}, {}, {}
+    for code, name, role, email, loc in cur.fetchall():
+        r = (role or "").strip().upper()
+        em = (email or "").strip()
+        if code:
+            loc_by_code[code.strip()] = loc or ""
+        if em:
+            loc_by_email[em.lower()] = loc or ""
+        target = acc if r == "ACCOUNTS" else (bh if r in ("BH", "RM") else None)
+        if target is None or not em:
+            continue
+        for part in re.split(r"[,;|]", loc or ""):
+            key = part.strip().lower()
+            if key and key not in target:      # first by row order wins
+                target[key] = (name, em)
+    return acc, bh, loc_by_code, loc_by_email
+
+
+def resync_routing():
+    """Fill MISSING Accounts / BH routing on cheques from the current employee
+    master. It never overwrites a value that is already set: a staff handover
+    does not retroactively move cheques someone already owns.
+
+    A cheque with no routing is resolved by, in order:
+      1. its own location,
+      2. the location of whoever scanned it (emp_code, else created_by email).
+    Cheques with neither cannot be resolved and are reported, not guessed at.
+    Every field filled is written to change_log."""
+    who = (current_user() or {}).get("email")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        acc, bh, loc_by_code, loc_by_email = _routing_maps(cur)
+
+        cur.execute("""
+            SELECT id, location, emp_code, created_by, accounts_email, accounts_name,
+                   bh_name, bh_email
+            FROM cheques
+            WHERE COALESCE(TRIM(accounts_email), '') = ''
+               OR COALESCE(TRIM(bh_name), '') = ''
+        """)
+        rows = cur.fetchall()
+
+        filled_acc = filled_bh = 0
+        unresolved = 0
+        for cid, loc, code, creator, a_mail, a_name, b_name, b_mail in rows:
+            # Which location should this cheque route by?
+            candidates = [loc]
+            if code:
+                candidates.append(loc_by_code.get(code.strip()))
+            if creator:
+                candidates.append(loc_by_email.get(creator.strip().lower()))
+            keys = []
+            for c in candidates:
+                for part in re.split(r"[,;|]", c or ""):
+                    k = part.strip().lower()
+                    if k:
+                        keys.append(k)
+            sets, vals, logged = [], [], []
+            a_hit = next((acc[k] for k in keys if k in acc), None)
+            b_hit = next((bh[k] for k in keys if k in bh), None)
+            if not (a_mail or "").strip() and a_hit:
+                sets += ["accounts_name=%s", "accounts_email=%s"]
+                vals += [a_hit[0], a_hit[1]]
+                logged.append(("accounts_email", a_mail, a_hit[1]))
+                filled_acc += 1
+            if not (b_name or "").strip() and b_hit:
+                sets += ["bh_name=%s", "bh_email=%s"]
+                vals += [b_hit[0], b_hit[1]]
+                logged.append(("bh_name", b_name, b_hit[0]))
+                filled_bh += 1
+            if not sets:
+                unresolved += 1
+                continue
+            vals.append(cid)
+            cur.execute(f"UPDATE cheques SET {', '.join(sets)}, updated_at=NOW() WHERE id=%s", vals)
+            for field, old, new in logged:
+                cur.execute(
+                    "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                    "old_value, new_value, reason, changed_by) "
+                    "VALUES ('cheque', %s, %s, %s, %s, 'routing re-sync from Staff Master', %s)",
+                    (str(cid), field, old, new, who),
+                )
+        conn.commit()
+        cur.close()
+        return {"checked": len(rows), "accounts_filled": filled_acc,
+                "bh_filled": filled_bh, "unresolved": unresolved}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def pairing_warnings(cur):
     """Locations whose ACCOUNTS+BH pair is broken — every location with SALES
     people needs one of each. ACCOUNTS/BH rows may cover several locations,
@@ -1219,6 +1318,13 @@ def staff_upload():
         out = {"success": True, "saved": saved}
         if skipped:
             out["warnings"] = skipped
+        # A staff change is exactly when routing goes stale, so close any gaps
+        # immediately rather than relying on someone remembering to click.
+        # A failure here must not fail the upload itself.
+        try:
+            out["resync"] = resync_routing()
+        except Exception as e:
+            out["resync_error"] = str(e)
         return jsonify(out)
     except Exception as e:
         conn.rollback()
@@ -1273,6 +1379,18 @@ def staff_update():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+
+@app.route("/staff/resync", methods=["POST"])
+@role_required("HO_ADMIN")
+def staff_resync():
+    """Fill missing Accounts/BH routing on existing cheques from the current
+    Staff Master. Runs automatically after an upload; this is the on-demand
+    button for when the master was edited row by row instead."""
+    try:
+        return jsonify({"success": True, **resync_routing()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/staff/delete", methods=["POST"])
