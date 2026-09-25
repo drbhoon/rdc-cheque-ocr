@@ -80,6 +80,16 @@
     <button class="btn" id="upBtn" disabled>Upload &amp; Replace</button>
     <div class="msg" id="msg"></div>
 
+    <div style="margin-top:18px;padding:12px 14px;border:1px solid #2d3148;border-radius:10px;
+                display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="font-size:13px;color:#9ca3af;">
+        Fill missing Accounts / BH routing on existing cheques from this Staff Master.
+        Runs automatically after an upload — use this if you edited rows above instead.
+        <b>It only fills blanks</b>; a cheque that already names someone is never changed.
+      </div>
+      <button class="btn" style="margin-top:0;width:auto;" onclick="resyncRouting(this)">↻ Re-sync routing</button>
+    </div>
+
     <div class="cols">
       Expected columns (header row, any order):
       <div>
@@ -149,6 +159,19 @@
     function stoast(m, err){ const t=document.getElementById('stoast');
       t.textContent=m; t.classList.toggle('err',!!err); t.classList.add('show');
       setTimeout(()=>t.classList.remove('show'),2200); }
+
+    async function resyncRouting(btn){
+      btn.disabled = true; const label = btn.textContent; btn.textContent = 'Working…';
+      try{
+        const res = await fetch('/staff/resync', {method:'POST'});
+        const d = await res.json();
+        if(d.success){
+          stoast(`✓ Checked ${d.checked} — filled Accounts on ${d.accounts_filled}, BH on ${d.bh_filled}` +
+                 (d.unresolved ? ` · ${d.unresolved} could not be resolved (no location and no known uploader)` : ''));
+        } else stoast('⚠ '+(d.error||'Failed'), true);
+      }catch{ stoast('⚠ Network error', true); }
+      btn.disabled = false; btn.textContent = label;
+    }
 
     async function saveStaff(btn){
       const tr = btn.closest('tr'); const name = tr.dataset.code;
