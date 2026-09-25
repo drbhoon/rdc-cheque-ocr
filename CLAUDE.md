@@ -93,6 +93,17 @@ Plus RETURNED (terminal): handed back to the customer WITHOUT being banked — s
 fresh cheque or settled by online transfer. `/cheque/<id>/return` (HO_ADMIN + ACCOUNTS)
 records returned_date/return_mode/return_reference; no further tracking, no reminders.
 Plus SECURITY (undated collateral cheques: no tracking/reminders, HO-Admin-deletable).
+
+## Archive (settled / handed off)
+`archived_at` + `archive_reason` + `archived_by` are a **flag, not a status** — the cheque
+keeps its real status (a Bounced cheque stays Bounced) so history and reporting stay true.
+- `/cheque/<id>/archive` (HO_ADMIN + ACCOUNTS) takes one of `ARCHIVE_REASONS` — free text is
+  refused, so the remarks stay consistent and reportable. Bounced cheques are offered
+  `ARCHIVE_REASONS_BOUNCED`, everything else `ARCHIVE_REASONS_OPEN`.
+- `/cheque/<id>/unarchive` (HO_ADMIN only) puts it back — the escape hatch for a mistake.
+- Archived cheques are hidden from the dashboard, the action list and reminders, and appear
+  only under the **Archived** tab, where search and the Excel download still work.
+  `cheque_filters()` adds `archived_at IS NULL` unless `?status=archived`.
 - "Expired" = 90-day bank validity lapsed (cheque_date + 90 < today), NOT past due date.
 - Cheque Date & Amount FROZEN after save; only HO_ADMIN `/cheque/<id>/override` with a
   mandatory reason (audited in `change_log`).
