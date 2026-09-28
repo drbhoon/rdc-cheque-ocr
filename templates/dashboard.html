@@ -107,7 +107,7 @@
       </div>
     </div>
 
-    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('returned','Returned'),('closed','Closed'),('archived','Archived'),('security','Security')] %}
+    {% set order = [('all','All'),('expired','Expired'),('pending','Pending'),('deposited','Deposited'),('bounced','Bounced'),('redeposited','Re-deposited'),('cleared','Cleared'),('legal','Legal'),('rtgs','RTGS-settled'),('returned','Returned'),('closed','Case Closed'),('archived','Closed / Archived'),('security','Security')] %}
     {% set keymap = {'all':None,'expired':'EXPIRED','pending':'PENDING','deposited':'DEPOSITED','bounced':'BOUNCED','redeposited':'REDEP','cleared':'CLEARED','legal':'LEGAL','rtgs':'RTGS_SETTLED','returned':'RETURNED','closed':'CLOSED','archived':'ARCHIVED','security':'SECURITY'} %}
     <div class="cards">
       {% for token, label in order %}
@@ -203,15 +203,15 @@
                 <button class="act ret" onclick="openModal('return',{{ r.id }})">Return</button>
               {% elif r.status == 'LEGAL' %}
                 <button class="act rtgs" onclick="openModal('rtgs',{{ r.id }})">RTGS</button>
-                <button class="act close" onclick="openModal('close',{{ r.id }})">Close</button>
+                <button class="act close" onclick="openModal('close',{{ r.id }})">Close Case</button>
               {% endif %}
               {% if r.archived_at %}
                 {% if user and user.role == 'HO_ADMIN' %}
-                <button class="act unarch" onclick="unarchiveCheque({{ r.id }})">↩ Restore</button>
+                <button class="act unarch" onclick="unarchiveCheque({{ r.id }})">↩ Reopen</button>
                 {% endif %}
               {% else %}
                 <button class="act arch" data-status="{{ r.status }}"
-                  onclick="openArchive({{ r.id }}, this.dataset.status)">🗄 Archive</button>
+                  onclick="openArchive({{ r.id }}, this.dataset.status)">✔ Close</button>
               {% endif %}
               <button class="act" onclick="showHistory({{ r.id }})">History</button>
               {% if user and user.role == 'HO_ADMIN' %}
@@ -264,23 +264,23 @@
     function openArchive(id, status){
       current = { action:'archive', id };
       confirmBtn.style.display='';
-      document.getElementById('modalTitle').textContent = 'Archive Cheque';
+      document.getElementById('modalTitle').textContent = 'Close Cheque';
       const list = (status === 'BOUNCED') ? ARCHIVE_REASONS_BOUNCED : ARCHIVE_REASONS_OPEN;
       document.getElementById('modalFields').innerHTML =
         `<label>Reason</label><select id="m-areason">` +
         list.map(r => `<option value="${r}">${r}</option>`).join('') +
         `</select>` + REMARKS +
-        `<div class="req-note">It leaves the dashboard and stops appearing in reminders, but stays searchable under <b>Archived</b>. HO Admin can restore it.</div>`;
+        `<div class="req-note">The cheque leaves the dashboard and stops appearing in reminders, but stays searchable under the <b>Archived</b> tab. HO Admin can reopen it.</div>`;
       document.getElementById('modalBg').classList.add('show');
     }
 
     async function unarchiveCheque(id){
-      if(!confirm('Put this cheque back on the dashboard?')) return;
+      if(!confirm('Reopen this cheque and put it back on the dashboard?')) return;
       try{
         const res = await fetch(`/cheque/${id}/unarchive`, {method:'POST',
           headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
         const d = await res.json();
-        if(d.success){ showToast('✓ Restored'); setTimeout(()=>location.reload(), 700); }
+        if(d.success){ showToast('✓ Reopened'); setTimeout(()=>location.reload(), 700); }
         else showToast('⚠ '+(d.error||'Failed'), true);
       }catch{ showToast('⚠ Network error', true); }
     }

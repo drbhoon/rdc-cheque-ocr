@@ -1685,8 +1685,8 @@ DASH_FILTERS = [
     ("legal",      "Legal"),
     ("rtgs",       "RTGS-settled"),
     ("returned",   "Returned"),
-    ("closed",     "Closed"),
-    ("archived",   "Archived"),
+    ("closed",     "Case Closed"),
+    ("archived",   "Closed / Archived"),
     ("security",   "Security"),
 ]
 
