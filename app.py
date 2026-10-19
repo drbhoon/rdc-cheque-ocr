@@ -2104,6 +2104,78 @@ def unarchive_cheque(cid):
         conn.close()
 
 
+@app.route("/cheque/<int:cid>/reassign", methods=["POST"])
+@role_required("HO_ADMIN", "ACCOUNTS")
+def reassign_cheque(cid):
+    """Correct the sales person on an existing cheque.
+
+    The cheque stores a SNAPSHOT of sales/accounts/BH taken when it was scanned,
+    so a wrong pick stays wrong — resync_routing() only fills blanks and never
+    overwrites. This re-derives the whole mapping from the employee master for
+    the chosen person's location, exactly as the scan screen does, so the three
+    can never drift apart. Every changed field is written to change_log."""
+    d = request.get_json(silent=True) or {}
+    emp_code = (d.get("emp_code") or "").strip()
+    if not emp_code:
+        return jsonify({"error": "Pick a sales person."}), 400
+    who = (current_user() or {}).get("email")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT emp_name, email, location, plant FROM employees "
+                    "WHERE emp_code=%s AND UPPER(TRIM(role))='SALES'", (emp_code,))
+        sp = cur.fetchone()
+        if not sp:
+            cur.close()
+            return jsonify({"error": "That person is not a SALES row in the Staff Master."}), 400
+        s_name, s_email, s_loc, s_plant = sp
+
+        acc, bh, _, _ = _routing_maps(cur)
+        keys = [x.strip().lower() for x in re.split(r"[,;|]", s_loc or "") if x.strip()]
+        a_name, a_mail = next((acc[k] for k in keys if k in acc), (None, None))
+        b_name, b_mail = next((bh[k] for k in keys if k in bh), (None, None))
+
+        cols = ["sales_name", "sales_email", "location", "plant",
+                "accounts_name", "accounts_email", "bh_name", "bh_email"]
+        cur.execute(f"SELECT {', '.join(cols)} FROM cheques WHERE id=%s", (cid,))
+        old = cur.fetchone()
+        if not old:
+            cur.close()
+            return jsonify({"error": "Cheque not found"}), 404
+        new_vals = (s_name, s_email, s_loc, s_plant, a_name, a_mail, b_name, b_mail)
+
+        cur.execute(f"UPDATE cheques SET {', '.join(c + '=%s' for c in cols)}, "
+                    f"updated_at=NOW() WHERE id=%s", list(new_vals) + [cid])
+        changed = 0
+        for col, o, n in zip(cols, old, new_vals):
+            if (o or None) != (n or None):
+                cur.execute(
+                    "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                    "old_value, new_value, reason, changed_by) "
+                    "VALUES ('cheque',%s,%s,%s,%s,'sales person reassigned',%s)",
+                    (str(cid), col, o, n, who))
+                changed += 1
+        cur.execute("INSERT INTO cheque_events "
+                    "(cheque_id, action, action_date, reason, remarks, done_by) "
+                    "VALUES (%s,'REASSIGNED',CURRENT_DATE,%s,%s,%s)",
+                    (cid, f"Sales: {s_name}",
+                     (d.get("remarks") or "").strip() or None, who))
+        conn.commit()
+        cur.close()
+        out = {"success": True, "fields_changed": changed, "sales_name": s_name,
+               "location": s_loc, "accounts_name": a_name, "accounts_email": a_mail,
+               "bh_name": b_name}
+        if not a_mail or not b_name:
+            out["warning"] = (f"No {'Accounts incharge' if not a_mail else 'Business Head'} "
+                              f"covers '{s_loc}' in the Staff Master — that part is now blank.")
+        return jsonify(out)
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+
 @app.route("/cheque/<int:cid>/override", methods=["POST"])
 @role_required("HO_ADMIN")
 def override_cheque(cid):
