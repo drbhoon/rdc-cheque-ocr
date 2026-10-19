@@ -140,11 +140,11 @@
         </select></div>
       <div><label>Location</label>
         <select id="f-loc" onchange="applyFilters()"><option value="">All</option>
-          {% for l in locations %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
+          {% for l in location_tokens %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
         </select></div>
       <div><label>Plant</label>
         <select id="f-plant" onchange="applyFilters()"><option value="">All</option>
-          {% for p in plants %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+          {% for p in plant_tokens %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
         </select></div>
       <div style="flex:1;min-width:180px;"><label>Search name / code / email</label>
         <input id="f-q" type="text" placeholder="type to search…" style="width:100%"
@@ -253,9 +253,7 @@
     function pickNew(sel){
       sel.closest('tr').classList.add('dirty');
       if (sel.value !== '__new__') return;
-      const v = (prompt('New value.
-
-For an Accounts/BH person covering several locations, separate them with commas — e.g. "NCR, Rajasthan, UP".') || '').trim();
+      const v = (prompt('New value. For someone covering several locations, separate them with commas, e.g. NCR, Rajasthan, UP') || '').trim();
       if (!v) { sel.value = sel.dataset.prev || ''; return; }
       let opt = Array.from(sel.options).find(o => o.value.toLowerCase() === v.toLowerCase());
       if (!opt) {
@@ -279,12 +277,17 @@ For an Accounts/BH person covering several locations, separate them with commas 
       const fp = document.getElementById('f-plant').value;
       const q  = document.getElementById('f-q').value.trim().toLowerCase();
       let shown = 0;
+      // An ACCOUNTS/BH person covers several locations in one comma-separated
+      // field, so match any item in that list - not the whole string.
+      const covers = (value, want) => value.split(/[,;|]/)
+            .map(x => x.trim().toLowerCase())
+            .includes(want.trim().toLowerCase());
       document.querySelectorAll('.staff-table tbody tr').forEach(tr => {
         const val = f => (tr.querySelector(`[data-f="${f}"]`)?.value || '');
         const hay = ((tr.dataset.code || '') + ' ' + val('emp_name') + ' ' + val('email')).toLowerCase();
         const ok = (!fr || val('role') === fr)
-                && (!fl || val('location') === fl)
-                && (!fp || val('plant') === fp)
+                && (!fl || covers(val('location'), fl))
+                && (!fp || covers(val('plant'), fp))
                 && (!q  || hay.includes(q));
         tr.style.display = ok ? '' : 'none';
         if (ok) shown++;

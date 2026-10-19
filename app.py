@@ -1266,9 +1266,21 @@ def staff_upload():
                             if (x["location"] or "").strip()}, key=str.lower)
         plants = sorted({(x["plant"] or "").strip() for x in staff
                          if (x["plant"] or "").strip()}, key=str.lower)
+        # Filters offer individual places; the row editors offer the full stored
+        # values, so a multi-location coverage string stays selectable intact.
+        def _tokens(values):
+            out = set()
+            for v in values:
+                for part in re.split(r"[,;|]", v or ""):
+                    if part.strip():
+                        out.add(part.strip())
+            return sorted(out, key=str.lower)
+
         return render_template("staff.html", count=len(staff), staff=staff,
                                fields=EMPLOYEE_FIELDS, audit=audit,
-                               roles=ROLE_CHOICES, locations=locations, plants=plants)
+                               roles=ROLE_CHOICES, locations=locations, plants=plants,
+                               location_tokens=_tokens(locations),
+                               plant_tokens=_tokens(plants))
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":
