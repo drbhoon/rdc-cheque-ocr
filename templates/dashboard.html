@@ -63,7 +63,7 @@
     .act.deposit{color:#4ade80}.act.bounce{color:#fca5a5}.act.redeposit{color:#93b0ff}.act.clear{color:#86efac}
     .act.legal{color:#d8b4fe}.act.rtgs{color:#5eead4}.act.close{color:#fbbf24}.act.override{color:#f59e0b}
     .act.del{color:#f87171}.act.del:hover{border-color:#f87171}.act.ret{color:#fdba74}
-    .act.arch{color:#94a3b8}.act.unarch{color:#7dd3fc}
+    .act.arch{color:#94a3b8}.act.unarch{color:#7dd3fc}.act.reassign{color:#c4b5fd}
 
     .empty { padding: 30px; text-align: center; color: #6b7280; font-size: 14px; }
     .tablewrap { overflow-x: auto; }
@@ -213,6 +213,10 @@
                 <button class="act arch" data-status="{{ r.status }}"
                   onclick="openArchive({{ r.id }}, this.dataset.status)">✔ Close</button>
               {% endif %}
+              {% if user and user.role in ('HO_ADMIN','ACCOUNTS') %}
+                <button class="act reassign" data-sales="{{ r.sales_name or '' }}"
+                  onclick="openReassign({{ r.id }}, this.dataset.sales)">👤 Reassign</button>
+              {% endif %}
               <button class="act" onclick="showHistory({{ r.id }})">History</button>
               {% if user and user.role == 'HO_ADMIN' %}
                 {% if r.status != 'SECURITY' %}
@@ -257,6 +261,37 @@
     const REMARKS = `<label>Remarks (optional)</label><input id="m-remarks" type="text" placeholder="any note for the history" />`;
 
     function setStatus(token){ document.getElementById('f-status').value = token; document.getElementById('filterForm').submit(); }
+
+    let SALES_CACHE = null;
+    function escAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+
+    async function openReassign(id, currentSales){
+      current = { action:'reassign', id };
+      confirmBtn.style.display='';
+      document.getElementById('modalTitle').textContent = 'Reassign Sales Person';
+      const f = document.getElementById('modalFields');
+      f.innerHTML = '<div class="muted">Loading Staff Master…</div>';
+      document.getElementById('modalBg').classList.add('show');
+      if(!SALES_CACHE){
+        try{
+          const r = await fetch('/staff');
+          const all = await r.json();
+          SALES_CACHE = (all||[])
+            .filter(x => String(x.role||'').trim().toUpperCase() === 'SALES')
+            .sort((a,b) => (a.emp_name||'').localeCompare(b.emp_name||''));
+        }catch{ SALES_CACHE = []; }
+      }
+      if(!SALES_CACHE.length){
+        f.innerHTML = '<div class="req-note">Could not load the Staff Master, or it has no SALES rows.</div>';
+        confirmBtn.style.display='none';
+        return;
+      }
+      f.innerHTML = `<div class="muted" style="margin-bottom:8px;">Currently: <b>${esc(currentSales || '— none —')}</b></div>` +
+        `<label>Sales Person</label><select id="m-emp">` +
+        SALES_CACHE.map(x => `<option value="${escAttr(x.emp_code)}">${esc(x.emp_name)} — ${esc(x.location || 'no location')}</option>`).join('') +
+        `</select>` + REMARKS +
+        `<div class="req-note">Accounts incharge and Business Head are re-derived from the Staff Master for that person's location, so the three stay consistent.</div>`;
+    }
 
     const ARCHIVE_REASONS_BOUNCED = {{ archive_reasons_bounced|tojson }};
     const ARCHIVE_REASONS_OPEN     = {{ archive_reasons_open|tojson }};
@@ -412,7 +447,8 @@
       } else {
         url = `/cheque/${id}/${action}`;
         body = { date: document.getElementById('m-date')?.value, remarks: document.getElementById('m-remarks')?.value };
-        if(action === 'archive'){ body.reason = document.getElementById('m-areason')?.value; }
+        if(action === 'reassign'){ body.emp_code = document.getElementById('m-emp')?.value; }
+        else if(action === 'archive'){ body.reason = document.getElementById('m-areason')?.value; }
         else if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
         else if(action === 'legal'){ body.reference = document.getElementById('m-ref')?.value; }
         else if(action === 'return'){ body.mode = document.getElementById('m-mode')?.value; body.reference = document.getElementById('m-ref')?.value; }
@@ -422,7 +458,13 @@
       try{
         const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
         const data = await res.json();
-        if(data.success){ showToast('✓ Updated'); setTimeout(()=>location.reload(), 700); }
+        if(data.success){
+          if(data.warning) showToast('⚠ '+data.warning, true);
+          else if(action === 'reassign')
+            showToast(`✓ Now ${data.sales_name} · Accounts: ${data.accounts_name || '—'} · BH: ${data.bh_name || '—'}`);
+          else showToast('✓ Updated');
+          setTimeout(()=>location.reload(), data.warning ? 2500 : 900);
+        }
         else showToast('⚠ '+(data.error||'Failed'), true);
       }catch{ showToast('⚠ Network error', true); }
       closeModal();

@@ -56,6 +56,13 @@ login, password) · company logo at `static/rdc-logo.jpg` on every page header.
   handover does not retroactively move cheques (user decision 2026-09-25), so after a
   handover the predecessor keeps the old cheques and the successor sees only new ones.
   Every filled field is written to `change_log`.
+- **Correcting a wrong mapping**: `/cheque/<id>/reassign` (HO_ADMIN + ACCOUNTS, "👤 Reassign"
+  on each dashboard row). Pick the right SALES person and the server re-derives
+  sales/location/plant + Accounts + BH from the employee master for that person's location —
+  the same derivation the scan screen uses, so the three can never drift apart. All eight
+  fields go to `change_log` and a REASSIGNED entry goes on the cheque's timeline. If the new
+  location has no pair, the routing is blanked and the response says so rather than silently
+  leaving stale values.
   Optional ERP `cust_code` entered at scan or set later from dashboard (audited).
 - **Pairing audit** (`pairing_warnings()`): runs on every Staff page load + upload;
   sticky amber box lists locations with missing/duplicate ACCOUNTS or BH.
