@@ -1063,6 +1063,9 @@ EMPLOYEE_FIELDS = ["emp_code", "emp_name", "role", "email", "location", "plant"]
 EMP_ROLE_MAP = {"SALES": "SALES", "ACCOUNTS": "ACCOUNTS", "BH": "VIEWER", "RM": "VIEWER",
                 "HO": "HO_ADMIN", "ADMIN": "HO_ADMIN", "HO_ADMIN": "HO_ADMIN",
                 "VIEWER": "VIEWER"}
+# Offered in the Staff Master dropdown — the aliases above still import fine
+# from a spreadsheet, but there is no reason to let anyone type a new one.
+ROLE_CHOICES = ["SALES", "ACCOUNTS", "BH", "RM", "HO", "VIEWER"]
 
 
 def employee_for(email):
@@ -1256,8 +1259,16 @@ def staff_upload():
             cur.close()
         finally:
             conn.close()
+        # Existing values become the dropdown options, exactly as stored — so a
+        # multi-location ACCOUNTS/BH row ("NCR, Rajasthan, UP") stays one valid
+        # choice instead of being broken apart.
+        locations = sorted({(x["location"] or "").strip() for x in staff
+                            if (x["location"] or "").strip()}, key=str.lower)
+        plants = sorted({(x["plant"] or "").strip() for x in staff
+                         if (x["plant"] or "").strip()}, key=str.lower)
         return render_template("staff.html", count=len(staff), staff=staff,
-                               fields=EMPLOYEE_FIELDS, audit=audit)
+                               fields=EMPLOYEE_FIELDS, audit=audit,
+                               roles=ROLE_CHOICES, locations=locations, plants=plants)
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":

@@ -45,6 +45,14 @@
     .staff-table .namecell { font-weight: 600; color: #e2e8f0; white-space: nowrap; }
     .staff-table input { width: 100%; min-width: 110px; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 6px 8px; font-size: 12px; outline: none; }
     .staff-table input:focus { border-color: #4f6ef7; }
+    .staff-table select { width: 100%; min-width: 110px; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 6px 8px; font-size: 12px; outline: none; }
+    .staff-table select:focus { border-color: #4f6ef7; }
+    .staff-table tr.dirty select { border-color: #3b4668; }
+    .sfilters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; background: #161922; border: 1px solid #2d3148; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+    .sfilters label { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+    .sfilters select, .sfilters input { background: #0f1117; border: 1px solid #2d3148; border-radius: 7px; color: #e2e8f0; padding: 7px 10px; font-size: 13px; outline: none; }
+    .sfilters select:focus, .sfilters input:focus { border-color: #4f6ef7; }
+    .sfilters .clearf { background: #2d3148; color: #cbd5e1; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
     .staff-table tr.dirty input { border-color: #3b4668; }
     /* Rows are already saved by the upload — Save only appears once you edit one */
     .staff-table .mini.save { display: none; }
@@ -123,7 +131,26 @@
   {% endif %}
 
   <div class="listing">
-    <h2 class="listing-title">Loaded Staff ({{ count }})</h2>
+    <h2 class="listing-title">Loaded Staff — showing <span id="shownCount">{{ count }}</span> of {{ count }}</h2>
+
+    <div class="sfilters">
+      <div><label>Role</label>
+        <select id="f-role" onchange="applyFilters()"><option value="">All</option>
+          {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+        </select></div>
+      <div><label>Location</label>
+        <select id="f-loc" onchange="applyFilters()"><option value="">All</option>
+          {% for l in locations %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
+        </select></div>
+      <div><label>Plant</label>
+        <select id="f-plant" onchange="applyFilters()"><option value="">All</option>
+          {% for p in plants %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select></div>
+      <div style="flex:1;min-width:180px;"><label>Search name / code / email</label>
+        <input id="f-q" type="text" placeholder="type to search…" style="width:100%"
+               oninput="applyFilters()" /></div>
+      <button class="clearf" onclick="clearFilters()">Clear</button>
+    </div>
     {% if staff %}
     <div class="tablewrap">
     <table class="staff-table">
@@ -136,10 +163,21 @@
         <tr data-code="{{ s.emp_code }}">
           <td class="namecell">{{ s.emp_code }}</td>
           <td><input data-f="emp_name" value="{{ s.emp_name or '' }}" /></td>
-          <td><input data-f="role"     value="{{ s.role or '' }}" /></td>
+          <td><select data-f="role" onchange="pickNew(this)">
+            {% for r in roles %}<option value="{{ r }}" {{ 'selected' if (s.role or '')|upper == r else '' }}>{{ r }}</option>{% endfor %}
+            {% if (s.role or '') and (s.role or '')|upper not in roles %}<option value="{{ s.role }}" selected>{{ s.role }} (unknown)</option>{% endif %}
+          </select></td>
           <td><input data-f="email"    value="{{ s.email or '' }}" /></td>
-          <td><input data-f="location" value="{{ s.location or '' }}" /></td>
-          <td><input data-f="plant"    value="{{ s.plant or '' }}" /></td>
+          <td><select data-f="location" onchange="pickNew(this)">
+            <option value="">— none —</option>
+            {% for l in locations %}<option value="{{ l }}" {{ 'selected' if (s.location or '').strip() == l else '' }}>{{ l }}</option>{% endfor %}
+            <option value="__new__">+ New…</option>
+          </select></td>
+          <td><select data-f="plant" onchange="pickNew(this)">
+            <option value="">— none —</option>
+            {% for p in plants %}<option value="{{ p }}" {{ 'selected' if (s.plant or '').strip() == p else '' }}>{{ p }}</option>{% endfor %}
+            <option value="__new__">+ New…</option>
+          </select></td>
           <td class="rowact">
             <button class="mini save" onclick="saveStaff(this)">Save</button>
             <button class="mini del" onclick="deleteStaff(this)">Delete</button>
@@ -180,7 +218,7 @@
     async function saveStaff(btn){
       const tr = btn.closest('tr'); const name = tr.dataset.code;
       const body = { emp_code: name };
-      tr.querySelectorAll('input[data-f]').forEach(i => body[i.dataset.f] = i.value);
+      tr.querySelectorAll('[data-f]').forEach(i => body[i.dataset.f] = i.value);
       btn.disabled = true; btn.textContent = '…';
       try{
         const res = await fetch('/staff/update', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
@@ -202,9 +240,63 @@
       }catch{ stoast('⚠ Network error', true); }
     }
 
-    // mark a row dirty when edited
-    document.querySelectorAll('.staff-table input[data-f]').forEach(i =>
-      i.addEventListener('input', () => i.closest('tr').classList.add('dirty')));
+    // mark a row dirty when edited (inputs type, selects change)
+    document.querySelectorAll('.staff-table [data-f]').forEach(i => {
+      i.addEventListener('input',  () => i.closest('tr').classList.add('dirty'));
+      i.addEventListener('change', () => i.closest('tr').classList.add('dirty'));
+    });
+    // remember what a dropdown held, so cancelling "+ New…" can put it back
+    document.addEventListener('focusin', e => {
+      if (e.target.matches('.staff-table select[data-f]')) e.target.dataset.prev = e.target.value;
+    });
+
+    function pickNew(sel){
+      sel.closest('tr').classList.add('dirty');
+      if (sel.value !== '__new__') return;
+      const v = (prompt('New value.
+
+For an Accounts/BH person covering several locations, separate them with commas — e.g. "NCR, Rajasthan, UP".') || '').trim();
+      if (!v) { sel.value = sel.dataset.prev || ''; return; }
+      let opt = Array.from(sel.options).find(o => o.value.toLowerCase() === v.toLowerCase());
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = v; opt.textContent = v;
+        sel.insertBefore(opt, sel.querySelector('option[value="__new__"]'));
+        // offer it on the matching filter too, so the new value is filterable
+        const fid = sel.dataset.f === 'location' ? 'f-loc' : (sel.dataset.f === 'plant' ? 'f-plant' : null);
+        if (fid) {
+          const f = document.getElementById(fid);
+          if (f && !Array.from(f.options).some(o => o.value.toLowerCase() === v.toLowerCase()))
+            f.appendChild(new Option(v, v));
+        }
+      }
+      sel.value = opt.value;
+    }
+
+    function applyFilters(){
+      const fr = document.getElementById('f-role').value;
+      const fl = document.getElementById('f-loc').value;
+      const fp = document.getElementById('f-plant').value;
+      const q  = document.getElementById('f-q').value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll('.staff-table tbody tr').forEach(tr => {
+        const val = f => (tr.querySelector(`[data-f="${f}"]`)?.value || '');
+        const hay = ((tr.dataset.code || '') + ' ' + val('emp_name') + ' ' + val('email')).toLowerCase();
+        const ok = (!fr || val('role') === fr)
+                && (!fl || val('location') === fl)
+                && (!fp || val('plant') === fp)
+                && (!q  || hay.includes(q));
+        tr.style.display = ok ? '' : 'none';
+        if (ok) shown++;
+      });
+      document.getElementById('shownCount').textContent = shown;
+    }
+
+    function clearFilters(){
+      ['f-role','f-loc','f-plant'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('f-q').value = '';
+      applyFilters();
+    }
     const file=document.getElementById('file'), upBtn=document.getElementById('upBtn'),
       fname=document.getElementById('fname'), msg=document.getElementById('msg');
     let selected=null;
