@@ -92,6 +92,32 @@
     <button class="btn" id="upBtn" disabled>Upload &amp; Replace</button>
     <div class="msg" id="msg"></div>
 
+    <div style="margin-top:18px;padding:14px;border:1px solid #92600f;border-radius:10px;background:#1c1405;">
+      <div style="font-weight:700;color:#fbbf24;margin-bottom:6px;">↔ Hand locations to a different Accounts incharge</div>
+      <div style="font-size:13px;color:#9ca3af;margin-bottom:10px;">
+        Does the whole handover: gives the locations to the new person, takes them off whoever
+        held them (two owners make routing ambiguous), and moves the live cheques at those
+        locations so they actually show on the new person's dashboard and digest.
+        Archived cheques are left as history. <b>Preview first</b> — it changes many rows.
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;">
+        <div><label style="display:block;font-size:11px;color:#94a3b8;margin-bottom:4px;">Locations (Ctrl/Cmd-click for several)</label>
+          <select id="h-locs" multiple size="6" style="min-width:220px;background:#0f1117;border:1px solid #2d3148;border-radius:7px;color:#e2e8f0;padding:6px;font-size:13px;">
+            {% for l in location_tokens %}<option value="{{ l }}">{{ l }}</option>{% endfor %}
+          </select></div>
+        <div><label style="display:block;font-size:11px;color:#94a3b8;margin-bottom:4px;">New Accounts incharge</label>
+          <select id="h-emp" style="min-width:240px;background:#0f1117;border:1px solid #2d3148;border-radius:7px;color:#e2e8f0;padding:8px;font-size:13px;">
+            {% for a in accounts_people %}<option value="{{ a.emp_code }}">{{ a.emp_name }} — {{ a.location or 'no coverage' }}</option>{% endfor %}
+          </select>
+          <div style="margin-top:10px;display:flex;gap:8px;">
+            <button class="mini" style="padding:8px 14px;" onclick="handover(true, this)">Preview</button>
+            <button class="mini" id="h-apply" style="padding:8px 14px;border-color:#92600f;color:#fbbf24;" onclick="handover(false, this)" disabled>Apply</button>
+          </div>
+        </div>
+      </div>
+      <pre id="h-out" style="display:none;margin-top:12px;background:#0f1117;border:1px solid #2d3148;border-radius:8px;padding:10px;font-size:12px;color:#cbd5e1;white-space:pre-wrap;"></pre>
+    </div>
+
     <div style="margin-top:18px;padding:12px 14px;border:1px solid #2d3148;border-radius:10px;
                 display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
       <div style="font-size:13px;color:#9ca3af;">
@@ -201,6 +227,47 @@
     function stoast(m, err){ const t=document.getElementById('stoast');
       t.textContent=m; t.classList.toggle('err',!!err); t.classList.add('show');
       setTimeout(()=>t.classList.remove('show'),2200); }
+
+    const NL = String.fromCharCode(10);   // avoids an escaped newline in this file
+    async function handover(dry, btn){
+      const locs = Array.from(document.getElementById('h-locs').selectedOptions).map(o => o.value);
+      const emp  = document.getElementById('h-emp').value;
+      const out  = document.getElementById('h-out');
+      if (!locs.length) { stoast('Pick at least one location', true); return; }
+      if (!dry && !confirm(`Apply this handover? ${locs.length} location(s) will move to the selected person, along with their live cheques.`)) return;
+      btn.disabled = true; const lbl = btn.textContent; btn.textContent = 'Working…';
+      try {
+        const res = await fetch('/staff/reassign-location', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ locations: locs, emp_code: emp, dry_run: dry })
+        });
+        const d = await res.json();
+        out.style.display = 'block';
+        if (!d.success) { out.textContent = '⚠ ' + (d.error || 'Failed'); btn.disabled = false; btn.textContent = lbl; return; }
+        const lines = [];
+        lines.push((dry ? 'PREVIEW — nothing changed yet' : 'APPLIED') + ' · to ' + d.target);
+        lines.push('Locations: ' + (d.locations || []).join(', '));
+        lines.push('');
+        lines.push('Staff Master coverage:');
+        if (!(d.employee_changes || []).length) lines.push('  (no change needed)');
+        (d.employee_changes || []).forEach(c =>
+          lines.push(`  ${c.gains ? '+' : '-'} ${c.emp_name}: "${c.from}"  ->  "${c.to}"`));
+        lines.push('');
+        if (dry) {
+          lines.push(`Cheques that would move: ${d.cheques_total}`);
+          (d.cheque_moves || []).forEach(m => lines.push(`  from ${m.from}: ${m.count}`));
+          if (!d.cheques_total) lines.push('  (none — they already point at this person)');
+          document.getElementById('h-apply').disabled = false;
+        } else {
+          lines.push(`Cheques moved: ${d.cheques_moved}`);
+          document.getElementById('h-apply').disabled = true;
+          setTimeout(() => location.reload(), 2500);
+        }
+        out.textContent = lines.join(NL);
+        stoast(dry ? 'Preview ready — review, then Apply' : '✓ Handover applied');
+      } catch { out.style.display='block'; out.textContent = '⚠ Network error'; }
+      btn.disabled = false; btn.textContent = lbl;
+    }
 
     async function resyncRouting(btn){
       btn.disabled = true; const label = btn.textContent; btn.textContent = 'Working…';
