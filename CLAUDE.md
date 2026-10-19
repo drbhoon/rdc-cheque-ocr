@@ -63,6 +63,14 @@ login, password) · company logo at `static/rdc-logo.jpg` on every page header.
   fields go to `change_log` and a REASSIGNED entry goes on the cheque's timeline. If the new
   location has no pair, the routing is blanked and the response says so rather than silently
   leaving stale values.
+- **Handing a territory over**: `/staff/reassign-location` (HO_ADMIN, panel on Staff Master).
+  Pick locations + the new Accounts incharge and it does all three halves of a handover at
+  once — adds the locations to the new person, **removes them from whoever held them** (two
+  owners make routing ambiguous: first-by-name silently wins), and moves the **live** cheques
+  at those locations so they actually reach the new dashboard and digest. Archived cheques are
+  left as history. Always `dry_run` first — the UI forces Preview before Apply. Staff and
+  cheque audit rows are written on the SAME transaction (not via `log_change()`, which commits
+  on its own connection and would survive a rollback).
   Optional ERP `cust_code` entered at scan or set later from dashboard (audited).
 - **Pairing audit** (`pairing_warnings()`): runs on every Staff page load + upload;
   sticky amber box lists locations with missing/duplicate ACCOUNTS or BH.

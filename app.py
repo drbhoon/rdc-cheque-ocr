@@ -1280,7 +1280,9 @@ def staff_upload():
                                fields=EMPLOYEE_FIELDS, audit=audit,
                                roles=ROLE_CHOICES, locations=locations, plants=plants,
                                location_tokens=_tokens(locations),
-                               plant_tokens=_tokens(plants))
+                               plant_tokens=_tokens(plants),
+                               accounts_people=[x for x in staff
+                                                if (x["role"] or "").strip().upper() == "ACCOUNTS"])
 
     # POST — parse uploaded xlsx
     if "file" not in request.files or request.files["file"].filename == "":
@@ -1420,6 +1422,121 @@ def staff_resync():
         return jsonify({"success": True, **resync_routing()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/staff/reassign-location", methods=["POST"])
+@role_required("HO_ADMIN")
+def staff_reassign_location():
+    """Hand a set of locations to a different Accounts incharge.
+
+    Does the whole handover in one place, because doing half of it is what
+    causes the confusion this fixes:
+      1. adds those locations to the new person's coverage,
+      2. removes them from any OTHER Accounts person — two people covering one
+         location makes routing ambiguous (first by name silently wins),
+      3. moves the live cheques at those locations onto the new person, so they
+         actually appear on their dashboard and in their digest.
+
+    Archived cheques are left alone: they are closed history, not work.
+    Send dry_run to get the plan without changing anything. Every cheque moved
+    is written to change_log."""
+    d = request.get_json(silent=True) or {}
+    locs = [str(x).strip() for x in (d.get("locations") or []) if str(x).strip()]
+    emp_code = (d.get("emp_code") or "").strip()
+    dry = bool(d.get("dry_run"))
+    if not locs:
+        return jsonify({"error": "Pick at least one location."}), 400
+    if not emp_code:
+        return jsonify({"error": "Pick the Accounts incharge to hand them to."}), 400
+
+    want = {x.lower() for x in locs}
+    who = (current_user() or {}).get("email")
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT emp_code, emp_name, email, location FROM employees "
+                    "WHERE emp_code=%s AND UPPER(TRIM(role))='ACCOUNTS'", (emp_code,))
+        tgt = cur.fetchone()
+        if not tgt:
+            cur.close()
+            return jsonify({"error": "That person is not an ACCOUNTS row in the Staff Master."}), 400
+        t_code, t_name, t_email, t_loc = tgt
+        if not (t_email or "").strip():
+            cur.close()
+            return jsonify({"error": f"{t_name} has no email in the Staff Master."}), 400
+
+        def split(v):
+            return [x.strip() for x in re.split(r"[,;|]", v or "") if x.strip()]
+
+        # 1 + 2 — plan the coverage changes
+        emp_changes = []
+        t_now = split(t_loc)
+        t_new = t_now + [l for l in locs if l.lower() not in {x.lower() for x in t_now}]
+        if t_new != t_now:
+            emp_changes.append({"emp_code": t_code, "emp_name": t_name,
+                                "from": ", ".join(t_now), "to": ", ".join(t_new), "gains": True})
+        cur.execute("SELECT emp_code, emp_name, location FROM employees "
+                    "WHERE UPPER(TRIM(role))='ACCOUNTS' AND emp_code <> %s", (t_code,))
+        for o_code, o_name, o_loc in cur.fetchall():
+            kept = [x for x in split(o_loc) if x.lower() not in want]
+            if kept != split(o_loc):
+                emp_changes.append({"emp_code": o_code, "emp_name": o_name,
+                                    "from": o_loc or "", "to": ", ".join(kept), "gains": False})
+
+        # 3 — plan the cheque moves (live cheques only)
+        cur.execute("""
+            SELECT COALESCE(NULLIF(TRIM(accounts_email),''),'(none)') AS from_email, COUNT(*)
+            FROM cheques
+            WHERE archived_at IS NULL
+              AND LOWER(TRIM(location)) = ANY(%s)
+              AND COALESCE(LOWER(TRIM(accounts_email)),'') <> LOWER(%s)
+            GROUP BY 1 ORDER BY 2 DESC
+        """, (list(want), t_email.strip()))
+        moves = [{"from": r[0], "count": r[1]} for r in cur.fetchall()]
+        total = sum(m["count"] for m in moves)
+
+        if dry:
+            cur.close()
+            return jsonify({"success": True, "dry_run": True, "target": t_name,
+                            "target_email": t_email, "locations": locs,
+                            "employee_changes": emp_changes, "cheque_moves": moves,
+                            "cheques_total": total})
+
+        for ch in emp_changes:
+            cur.execute("UPDATE employees SET location=%s, updated_at=NOW() WHERE emp_code=%s",
+                        (ch["to"], ch["emp_code"]))
+            # Written on THIS transaction, not via log_change() which commits on
+            # its own connection — an audit row must never survive a rollback.
+            cur.execute(
+                "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                "old_value, new_value, reason, changed_by) "
+                "VALUES ('STAFF',%s,'location',%s,%s,'location handover',%s)",
+                (ch["emp_code"], ch["from"], ch["to"], who))
+        cur.execute("""
+            SELECT id, accounts_email FROM cheques
+            WHERE archived_at IS NULL
+              AND LOWER(TRIM(location)) = ANY(%s)
+              AND COALESCE(LOWER(TRIM(accounts_email)),'') <> LOWER(%s)
+        """, (list(want), t_email.strip()))
+        rows = cur.fetchall()
+        for cid, old_email in rows:
+            cur.execute("UPDATE cheques SET accounts_name=%s, accounts_email=%s, "
+                        "updated_at=NOW() WHERE id=%s", (t_name, t_email, cid))
+            cur.execute(
+                "INSERT INTO change_log (entity_type, entity_id, field_changed, "
+                "old_value, new_value, reason, changed_by) "
+                "VALUES ('cheque',%s,'accounts_email',%s,%s,'location handover',%s)",
+                (str(cid), old_email, t_email, who))
+        conn.commit()
+        cur.close()
+        return jsonify({"success": True, "dry_run": False, "target": t_name,
+                        "locations": locs, "employee_changes": emp_changes,
+                        "cheques_moved": len(rows)})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/staff/delete", methods=["POST"])
