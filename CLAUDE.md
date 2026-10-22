@@ -86,6 +86,14 @@ matches the screen and the three can never drift apart.
 - SALES is not scoped this way (unchanged behaviour).
 The dashboard's Excel link passes the current query string through to `/export`.
 
+## Fencing off the test deployment
+Accounts staff were signing in to the Railway test site and entering real cheques there.
+- `LOGIN_ALLOWLIST` (comma-separated emails): when set, only those may sign in — checked
+  AFTER the password so it reveals nothing about which accounts exist. Unset in production.
+  `/forgot` is gated the same way, so a fenced site never emails a reset link it cannot honour.
+- `BANNER_TEXT`: notice shown on the login page, used to point people at the live system.
+- Set BOTH on Railway only. Leaving them unset is what makes prod behave normally.
+
 ## Logins
 `users` table. First HO Admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD` while table
 empty. **Bulk logins**: Users page → "Create logins from Staff Master" gives every

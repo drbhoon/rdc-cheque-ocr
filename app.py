@@ -68,6 +68,21 @@ DEFAULT_PASSWORD = "Welcome@123"
 # Minutes a password-reset link stays valid.
 RESET_TOKEN_TTL_MIN = 60
 
+
+def login_allowlist():
+    """Emails permitted to sign in, from LOGIN_ALLOWLIST (comma-separated).
+
+    Empty means everyone — production leaves it unset. The test deployment sets
+    it so staff who wander onto the wrong URL cannot enter real cheques there."""
+    return [e.strip().lower()
+            for e in (os.environ.get("LOGIN_ALLOWLIST") or "").split(",") if e.strip()]
+
+
+def env_banner():
+    """Optional notice shown on the login page, e.g. to point people at the
+    live system. Set BANNER_TEXT on the test deployment only."""
+    return (os.environ.get("BANNER_TEXT") or "").strip() or None
+
 _client = None
 
 
@@ -632,7 +647,7 @@ def login():
     if request.method == "GET":
         if current_user():
             return redirect(url_for(landing_for(current_user()["role"])))
-        return render_template("login.html")
+        return render_template("login.html", banner=env_banner())
 
     email = (request.form.get("email") or "").strip().lower()
     password = request.form.get("password") or ""
@@ -650,7 +665,18 @@ def login():
         conn.close()
 
     if not row or not row[4] or not check_password_hash(row[2], password):
-        return render_template("login.html", error="Invalid email or password."), 401
+        return render_template("login.html", error="Invalid email or password.",
+                               banner=env_banner()), 401
+
+    # Fenced-off environment: credentials are correct, but this deployment is
+    # not for this person. Checked AFTER the password so it leaks nothing about
+    # which accounts exist.
+    allow = login_allowlist()
+    if allow and (row[0] or "").strip().lower() not in allow:
+        return render_template("login.html", banner=env_banner(),
+                               error=("This is the TEST system and is restricted to the "
+                                      "administrator. Please use the live system — your "
+                                      "login works there.")), 403
 
     # Authority comes from the employee master ROLE when this email is listed
     # there; the users-table role is only the fallback (e.g. the seeded HO Admin).
@@ -682,6 +708,10 @@ def forgot_password():
     generic = render_template("forgot.html", sent=True, email=email)
     if not email or "@" not in email:
         return generic
+
+    allow = login_allowlist()
+    if allow and email not in allow:
+        return generic          # fenced environment: nothing to reset here
 
     conn = get_db()
     try:
