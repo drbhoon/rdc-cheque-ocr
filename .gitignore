@@ -14,3 +14,5 @@ User Test Data -ignore/
 # watchdog artefacts (local only)
 watchdog.log
 watchdog-diag.log
+.watchdog.lock
+.watchdog-last-restart

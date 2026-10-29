@@ -17,7 +17,9 @@ drbhoon/rdc-ledger-reconciliation) — never edit it from this chat, and vice-ve
 - Railway uses Nixpacks (`railway.json`, gunicorn start command). Docker files
   (Dockerfile / docker-compose.yml / .env.example) exist only on `prod`.
 - Prod deploy: server `developer@RDC-AI-UBUNTU:~/projects/rdc-pdc-app`,
-  `git pull && docker compose up -d --build`.
+  `git pull && docker compose up -d --build && ./install-watchdog.sh`.
+  The installer is idempotent — run it every deploy. It was once a separate
+  manual step, was never done, and the site stayed down 9 days (2026-10-29).
 - Daily reminder cron: cron-job.org hits `GET /cron/reminders?key=<CRON_SECRET>` daily
   ~9:00 IST (do NOT use Railway cron — it restarts the service).
 
@@ -181,8 +183,15 @@ Users reported the app getting slower over days until threads/sockets were clear
   minute. Docker will NOT restart an unhealthy container by itself; the watchdog does. It
   probes twice, appends evidence to `watchdog-diag.log` (container `ps -ef`, host socket
   states, `pg_stat_activity`, last 80 log lines) and restarts ONLY the app container —
-  Postgres and its volume are untouched. Install: `chmod +x watchdog.sh` then
-  `* * * * * /home/developer/projects/rdc-pdc-app/watchdog.sh` in the developer crontab.
+  Postgres and its volume are untouched. Install with `./install-watchdog.sh` (idempotent: replaces its own crontab line,
+  leaves other entries alone, never writes an empty crontab, and warns if the cron
+  service is dead or `flock` is missing). Three things in `watchdog.sh` exist only
+  because it runs from cron every minute: it hardens `PATH` (`ss` is in `/usr/sbin`,
+  which cron does NOT provide, so socket evidence was silently lost), it takes a
+  non-blocking `flock` (guarded by `command -v` — a bare `flock` call on a box
+  without it exits 127, hits `|| exit 0` and disables the watchdog in silence), and
+  it honours a 180s restart **cooldown** via `.watchdog-last-restart`, without which
+  a slow boot becomes a restart loop (probe+sleep take ~25s, so runs overlap).
 - **Postgres reaps its own sessions**: `idle_session_timeout=5min` +
   `idle_in_transaction_session_timeout=60s` are set on the SERVER (compose `command`), so
   they apply to every connection regardless of what the client asked for.
