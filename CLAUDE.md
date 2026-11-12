@@ -11,17 +11,42 @@ drbhoon/rdc-ledger-reconciliation) — never edit it from this chat, and vice-ve
 | Branch | Purpose | Target |
 |---|---|---|
 | `main` | Development — auto-deploys | Railway → **https://pdc.bhoon.org** |
-| `prod` | Production — Docker | Company Azure server → **pdc.rdcc.ai** (LAN 192.168.100.7:3001) |
+| `prod` | Production — Docker | Company Azure server → **https://fin.rdcc.ai/cheque** |
+
+**pdc.rdcc.ai is retired.** It was renamed fin.rdcc.ai (2026-11-12), an umbrella
+for RDC's finance apps with a tile each, exactly like hr.rdcc.ai. Same server,
+same host ports — port 3001 is now an nginx front door instead of this app, and
+this app is the **Cheque Management** tile at `/cheque`. The platform wiring
+(nginx, portal, compose) lives in a SEPARATE repo, `rdc-fin-platform`, which
+clones this one as a sibling. This repo no longer owns its own deployment.
 
 - Local folder may sit on `prod`; check `git branch` before editing.
 - Railway uses Nixpacks (`railway.json`, gunicorn start command). Docker files
   (Dockerfile / docker-compose.yml / .env.example) exist only on `prod`.
-- Prod deploy: server `developer@RDC-AI-UBUNTU:~/projects/rdc-pdc-app`,
-  `git pull && docker compose up -d --build && ./install-watchdog.sh`.
-  The installer is idempotent — run it every deploy. It was once a separate
+- Prod deploy: `cd ~/projects/rdc-fin && ./scripts/deploy.sh cheque` — the fin
+  platform pulls this repo and rebuilds only this container. The old
+  `~/projects/rdc-pdc-app` stack is the rollback and must stay stopped, never
+  `down -v` (that would delete the cheque data volume the fin stack attaches to).
+  `deploy.sh` re-runs the watchdog installer every time: it was once a separate
   manual step, was never done, and the site stayed down 9 days (2026-10-29).
 - Daily reminder cron: cron-job.org hits `GET /cron/reminders?key=<CRON_SECRET>` daily
   ~9:00 IST (do NOT use Railway cron — it restarts the service).
+
+## Path prefix (BASE_PATH)
+Served at `/cheque` on fin.rdcc.ai. `BASE_PATH` (unset = root, which is what
+local dev and Railway use) moves the prefix from PATH_INFO into SCRIPT_NAME via
+`_PrefixMiddleware`, so **`url_for()` emits `/cheque/...` by itself** — every
+redirect in app.py already goes through `url_for`, so none needed changing.
+Outside the prefix the app returns 404 rather than serving, so it can never
+answer at both `/login` and `/cheque/login` with links that disagree; `/healthz`
+is the one exception, because the container healthcheck probes it directly.
+
+**Templates contain no `url_for` at all** — 121 hardcoded absolute paths, each
+now carrying `{{ BP }}` (a context processor). Jinja renders `<script>` blocks
+too, so the same marker works inside `fetch()` calls and template literals.
+**Any new path in a template must start with `{{ BP }}`** or it will break the
+moment it is clicked. Verify with:
+`grep -nE "[=(,: ][\"'\`]/" templates/*.html | grep -v '{{ BP }}'` (must be empty).
 
 ## Prod ports (prod branch)
 Container ports EQUAL host ports (8000/5432 clash with other apps on the server):
