@@ -24,6 +24,65 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-insecure-change-me")
 
+# ── Mounting under a path prefix (fin.rdcc.ai/cheque) ────────────────────────
+# On fin.rdcc.ai this app is one tile among several, served under /cheque by
+# the platform nginx. Unset, BASE_PATH changes nothing and the app still runs
+# at the root — which is what local development and Railway rely on.
+#
+# nginx forwards the FULL path (its proxy_pass uses a variable with no URI
+# part, so request-time DNS keeps the platform booting while a container is
+# down). The middleware below is therefore what makes routing work: it moves
+# the prefix out of PATH_INFO and into SCRIPT_NAME, exactly as FastAPI's
+# root_path does for the SRT app. url_for() then emits /cheque/... by itself,
+# so every redirect in this file follows without being touched.
+#
+# Templates are a different matter: they hardcode absolute paths and never
+# call url_for, so each path carries a {{ BP }} prefix instead. Jinja renders
+# the <script> blocks too, so the same marker works inside JavaScript.
+BASE_PATH = (os.environ.get("BASE_PATH") or "").strip().rstrip("/")
+
+
+class _PrefixMiddleware:
+    """Serve the app ONLY under the mount prefix, and nothing else.
+
+    The prefix moves from PATH_INFO into SCRIPT_NAME, which is what makes
+    url_for() emit /cheque/... by itself.
+
+    Anything outside the prefix is refused rather than passed through: without
+    that, every page would answer at BOTH /login and /cheque/login, and the two
+    would disagree about what their links mean. The single exception is
+    /healthz, because the container healthcheck probes it directly on the
+    container port and never goes through nginx.
+    """
+
+    BYPASS = {"/healthz"}
+
+    def __init__(self, wsgi_app, prefix):
+        self.wsgi_app = wsgi_app
+        self.prefix = prefix
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path == self.prefix or path.startswith(self.prefix + "/"):
+            environ["SCRIPT_NAME"] = environ.get("SCRIPT_NAME", "") + self.prefix
+            environ["PATH_INFO"] = path[len(self.prefix):] or "/"
+        elif path not in self.BYPASS:
+            start_response("404 Not Found",
+                           [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found. This application is served under "
+                    + self.prefix.encode() + b"/"]
+        return self.wsgi_app(environ, start_response)
+
+
+if BASE_PATH:
+    app.wsgi_app = _PrefixMiddleware(app.wsgi_app, BASE_PATH)
+
+
+@app.context_processor
+def _inject_base_path():
+    """Every template prefixes its absolute paths with {{ BP }}."""
+    return {"BP": BASE_PATH}
+
 # ── Slow-request logging ─────────────────────────────────────────────────────
 # Diagnostics for recurring slowness: any request over SLOW_REQUEST_MS is
 # printed to the container log with its path, user and duration, so the next

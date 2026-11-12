@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Users — RDC Cheque Tracking and Control System</title>
@@ -50,13 +50,13 @@
   <div class="topbar">
     <div class="who">Signed in as <b>{{ user.email }}</b> ({{ user.role }})</div>
     <div class="links">
-      <a href="/">＋ Scan</a><a href="/report">📋 Report</a>
-      <a href="/staff/upload">👥 Staff</a><a href="/logout">Logout</a>
+      <a href="{{ BP }}/">＋ Scan</a><a href="{{ BP }}/report">📋 Report</a>
+      <a href="{{ BP }}/staff/upload">👥 Staff</a><a href="{{ BP }}/logout">Logout</a>
     </div>
   </div>
 
   <div class="card">
-    <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+    <h1><img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC"
       style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />👤 RDC Cheque Tracking and Control System <span style="font-weight:400;font-size:.72em;color:#6b7280;">&middot; Users &amp; Access</span></h1>
     <div class="sub">HO Admins manage logins and roles. Every change is recorded in the edit log.<br/>
       Roles are driven by the Staff Master at each login — the role here is only the fallback.</div>
@@ -134,20 +134,20 @@
       const name =document.getElementById('n-name').value.trim();
       const role =document.getElementById('n-role').value;
       const pw   =document.getElementById('n-pw').value;
-      const {ok,data}=await post('/users',{email,name,role,password:pw});
+      const {ok,data}=await post('{{ BP }}/users',{email,name,role,password:pw});
       if(ok&&data.success){ toast('✓ User added'); setTimeout(()=>location.reload(),800); }
       else toast('⚠ '+(data.error||'Failed'), true);
     }
 
     async function updateUser(id, patch){
-      const {ok,data}=await post('/users/'+id, patch);
+      const {ok,data}=await post('{{ BP }}/users/'+id, patch);
       if(ok&&data.success){ toast('✓ Updated'); setTimeout(()=>location.reload(),700); }
       else toast('⚠ '+(data.error||'Failed'), true);
     }
 
     async function bulkLogins(n){
       if(!confirm(`Create ${n} login(s) with password Welcome@123 (forced change at first login)? Existing accounts are not touched.`)) return;
-      const {ok,data}=await post('/users/bulk-logins',{});
+      const {ok,data}=await post('{{ BP }}/users/bulk-logins',{});
       if(ok&&data.success){ toast(`✓ ${data.created} login(s) created`); setTimeout(()=>location.reload(),1000); }
       else toast('⚠ '+(data.error||'Failed'), true);
     }
@@ -155,7 +155,7 @@
     async function resetPw(id){
       const pw=prompt('New password (min 6 characters):');
       if(!pw) return;
-      const {ok,data}=await post('/users/'+id,{password:pw});
+      const {ok,data}=await post('{{ BP }}/users/'+id,{password:pw});
       if(ok&&data.success) toast('✓ Password reset');
       else toast('⚠ '+(data.error||'Failed'), true);
     }

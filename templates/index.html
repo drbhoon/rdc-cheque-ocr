@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RDC Cheque Tracking and Control System</title>
@@ -153,19 +153,19 @@
 </head>
 <body>
   <div class="topbar">
-    <a href="/dashboard">📊 Dashboard</a>
-    <a href="/report">📋 Clearing Report</a>
+    <a href="{{ BP }}/dashboard">📊 Dashboard</a>
+    <a href="{{ BP }}/report">📋 Clearing Report</a>
     {% if user and user.role == 'HO_ADMIN' %}
-    <a href="/staff/upload">👥 Staff Master</a>
-    <a href="/users">👤 Users</a>
+    <a href="{{ BP }}/staff/upload">👥 Staff Master</a>
+    <a href="{{ BP }}/users">👤 Users</a>
     {% endif %}
-    <a href="/export" target="_blank">📥 Excel</a>
-    {% if user %}<a href="/logout" title="{{ user.email }}">Logout ({{ user.role }})</a>{% endif %}
+    <a href="{{ BP }}/export" target="_blank">📥 Excel</a>
+    {% if user %}<a href="{{ BP }}/logout" title="{{ user.email }}">Logout ({{ user.role }})</a>{% endif %}
   </div>
 
   <div class="card">
     <div class="logo">
-      <img src="/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver"
+      <img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver"
            style="height:56px;background:#fff;border-radius:10px;padding:3px 8px;object-fit:contain;" />
       <div>
         <h1>RDC Cheque Tracking and Control System</h1>
@@ -218,7 +218,7 @@
   <script>
     // Redirect to login if the session expires mid-use
     (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
-      if(r.status===401){ location.href='/login'; } return r; }; })();
+      if(r.status===401){ location.href='{{ BP }}/login'; } return r; }; })();
     const $ = id => document.getElementById(id);
     const dropZone=$('dropZone'), fileInput=$('fileInput'), cameraInput=$('cameraInput'),
       previewWrap=$('previewWrap'), previewImg=$('previewImg'), previewPdf=$('previewPdf'),
@@ -249,7 +249,7 @@
     ];
 
     // Load staff master for dropdown
-    fetch('/staff').then(r=>r.json()).then(d=>{ staff=d||[]; }).catch(()=>{});
+    fetch('{{ BP }}/staff').then(r=>r.json()).then(d=>{ staff=d||[]; }).catch(()=>{});
 
     fileInput.addEventListener('change', ()=>{ if(fileInput.files[0]) loadPreview(fileInput.files[0]); });
     cameraInput.addEventListener('change', ()=>{ if(cameraInput.files[0]) loadPreview(cameraInput.files[0]); });
@@ -274,7 +274,7 @@
       resultSection.style.display='none'; acceptBtn.style.display='none';
       const fd=new FormData(); fd.append('image', selectedFile);
       try{
-        const res=await fetch('/predict',{method:'POST',body:fd});
+        const res=await fetch('{{ BP }}/predict',{method:'POST',body:fd});
         const data=await res.json();
         if(data.error){ resultBody.innerHTML=`<div class="error-box">⚠️ ${esc(data.error)}</div>`; }
         else if(!data.cheque){ resultBody.innerHTML=`<div style="text-align:center;padding:24px;color:#6b7280;">No cheque data extracted.</div>`; }
@@ -488,7 +488,7 @@
 
       acceptBtn.disabled=true; acceptBtn.innerHTML='<span class="spinner"></span>Saving…';
       try{
-        const res=await fetch('/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const res=await fetch('{{ BP }}/accept',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const data=await res.json();
         if(res.status===409){ showToast('⚠ '+(data.message||'Duplicate cheque — already recorded.'),true);
           acceptBtn.disabled=false; acceptBtn.innerHTML='✅ Accept &amp; Save'; return; }

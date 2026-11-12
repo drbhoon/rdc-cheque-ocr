@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard — RDC Cheque Tracking and Control System</title>
@@ -95,15 +95,15 @@
 <body>
   <div class="wrap">
     <div class="topbar">
-      <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+      <h1><img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC"
         style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />📊 RDC Cheque Tracking and Control System <span style="font-weight:400;font-size:.72em;color:#6b7280;">&middot; Dashboard</span></h1>
       <div class="links">
-        {% if user and user.role in ['HO_ADMIN','ACCOUNTS','SALES'] %}<a href="/">＋ Scan</a>{% endif %}
-        <a href="/report">📋 Action List</a>
-        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
-        <a href="/export{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}"
+        {% if user and user.role in ['HO_ADMIN','ACCOUNTS','SALES'] %}<a href="{{ BP }}/">＋ Scan</a>{% endif %}
+        <a href="{{ BP }}/report">📋 Action List</a>
+        {% if user and user.role == 'HO_ADMIN' %}<a href="{{ BP }}/staff/upload">👥 Staff</a><a href="{{ BP }}/reminders">✉️ Reminders</a><a href="{{ BP }}/users">👤 Users</a>{% endif %}
+        <a href="{{ BP }}/export{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}"
            target="_blank" title="Downloads exactly the cheques shown below">📥 Excel</a>
-        <a href="/logout">Logout ({{ user.role }})</a>
+        <a href="{{ BP }}/logout">Logout ({{ user.role }})</a>
       </div>
     </div>
 
@@ -122,7 +122,7 @@
       {% endfor %}
     </div>
 
-    <form class="filters" id="filterForm" method="get" action="/dashboard">
+    <form class="filters" id="filterForm" method="get" action="{{ BP }}/dashboard">
       <input type="hidden" name="status" id="f-status" value="{{ active }}" />
       <div class="grow">
         <label>Search (payee / account / cheque no / issuer)</label>
@@ -149,7 +149,7 @@
         </select></div>
       {% endif %}
       <button class="apply" type="submit">Apply</button>
-      <a class="clear" href="/dashboard">Clear</a>
+      <a class="clear" href="{{ BP }}/dashboard">Clear</a>
     </form>
 
     {% if scope_locked %}
@@ -254,7 +254,7 @@
 
   <script>
     (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
-      if(r.status===401){ location.href='/login'; } return r; }; })();
+      if(r.status===401){ location.href='{{ BP }}/login'; } return r; }; })();
     const today = "{{ today }}";
     let current = { action:null, id:null };
     const confirmBtn = document.getElementById('modalConfirm');
@@ -274,7 +274,7 @@
       document.getElementById('modalBg').classList.add('show');
       if(!SALES_CACHE){
         try{
-          const r = await fetch('/staff');
+          const r = await fetch('{{ BP }}/staff');
           const all = await r.json();
           SALES_CACHE = (all||[])
             .filter(x => String(x.role||'').trim().toUpperCase() === 'SALES')
@@ -312,7 +312,7 @@
     async function unarchiveCheque(id){
       if(!confirm('Reopen this cheque and put it back on the dashboard?')) return;
       try{
-        const res = await fetch(`/cheque/${id}/unarchive`, {method:'POST',
+        const res = await fetch(`{{ BP }}/cheque/${id}/unarchive`, {method:'POST',
           headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
         const d = await res.json();
         if(d.success){ showToast('✓ Reopened'); setTimeout(()=>location.reload(), 700); }
@@ -324,7 +324,7 @@
       const v = prompt('ERP Customer Code (leave blank to clear):', cur || '');
       if(v === null) return;
       try{
-        const res = await fetch(`/cheque/${id}/custcode`, { method:'POST',
+        const res = await fetch(`{{ BP }}/cheque/${id}/custcode`, { method:'POST',
           headers:{'Content-Type':'application/json'}, body: JSON.stringify({ cust_code: v }) });
         const d = await res.json();
         if(d.success){
@@ -338,7 +338,7 @@
     async function deleteCheque(id, label){
       if(!confirm('Delete '+(label||'this cheque')+'? This permanently removes the entry and its history.')) return;
       try{
-        const res = await fetch('/cheque/'+id+'/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+        const res = await fetch('{{ BP }}/cheque/'+id+'/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
         const data = await res.json();
         if(data.success){ showToast('✓ Deleted'); setTimeout(()=>location.reload(), 700); }
         else showToast('⚠ '+(data.error||'Failed'), true);
@@ -403,7 +403,7 @@
       const f = document.getElementById('modalFields'); f.innerHTML = '<div class="muted">Loading…</div>';
       document.getElementById('modalBg').classList.add('show');
       try{
-        const res = await fetch(`/cheque/${id}/history`); const data = await res.json();
+        const res = await fetch(`{{ BP }}/cheque/${id}/history`); const data = await res.json();
         f.innerHTML = renderHistory(data);
       }catch{ f.innerHTML = '<div class="muted">Could not load history.</div>'; }
     }
@@ -441,11 +441,11 @@
       if(action === 'override'){
         const reason = document.getElementById('o-reason')?.value.trim();
         if(!reason){ showToast('⚠ A reason is required', true); return; }
-        url = `/cheque/${id}/override`;
+        url = `{{ BP }}/cheque/${id}/override`;
         body = { cheque_date_iso: document.getElementById('o-date')?.value,
                  amount_numbers: document.getElementById('o-amount')?.value, reason };
       } else {
-        url = `/cheque/${id}/${action}`;
+        url = `{{ BP }}/cheque/${id}/${action}`;
         body = { date: document.getElementById('m-date')?.value, remarks: document.getElementById('m-remarks')?.value };
         if(action === 'reassign'){ body.emp_code = document.getElementById('m-emp')?.value; }
         else if(action === 'archive'){ body.reason = document.getElementById('m-areason')?.value; }

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Reset Password — RDC Cheque Tracking and Control System</title>
@@ -35,11 +35,11 @@
 <body>
   <div class="card">
     <div class="logo">
-      <img src="/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver" />
+      <img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver" />
       <div><h1>Set a New Password</h1><p>RDC Cheque Tracking and Control System</p></div>
     </div>
     {% if valid %}
-    <form method="POST" action="/reset">
+    <form method="POST" action="{{ BP }}/reset">
       <input type="hidden" name="token" value="{{ token }}" />
       <label for="new">New password</label>
       <input type="password" id="new" name="new" autocomplete="new-password" minlength="8" required autofocus />
@@ -54,9 +54,9 @@
       This reset link is invalid or has expired. Reset links are valid for 60 minutes and
       can be used once. Please request a new one.
     </div>
-    <div class="back" style="margin-top:18px;"><a href="/forgot">Request a new reset link</a></div>
+    <div class="back" style="margin-top:18px;"><a href="{{ BP }}/forgot">Request a new reset link</a></div>
     {% endif %}
-    <div class="back"><a href="/login">← Back to sign in</a></div>
+    <div class="back"><a href="{{ BP }}/login">← Back to sign in</a></div>
   </div>
 </body>
 </html>

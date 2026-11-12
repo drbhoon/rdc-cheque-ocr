@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Clearing Report — RDC Cheque Tracking and Control System</title>
@@ -100,15 +100,15 @@
 <body>
   <div class="wrap">
     <div class="topbar">
-      <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+      <h1><img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC"
         style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />📋 RDC Cheque Tracking and Control System <span style="font-weight:400;font-size:.72em;color:#6b7280;">&middot; Clearing Report</span></h1>
       <div class="links">
         <span class="today">Today: {{ today_dmy }}</span>
-        <a href="/">＋ Scan</a>
-        <a href="/dashboard">📊 Dashboard</a>
-        {% if user and user.role == 'HO_ADMIN' %}<a href="/staff/upload">👥 Staff</a><a href="/reminders">✉️ Reminders</a><a href="/users">👤 Users</a>{% endif %}
-        <a href="/export" target="_blank">📥 Excel</a>
-        {% if user %}<a href="/logout">Logout</a>{% endif %}
+        <a href="{{ BP }}/">＋ Scan</a>
+        <a href="{{ BP }}/dashboard">📊 Dashboard</a>
+        {% if user and user.role == 'HO_ADMIN' %}<a href="{{ BP }}/staff/upload">👥 Staff</a><a href="{{ BP }}/reminders">✉️ Reminders</a><a href="{{ BP }}/users">👤 Users</a>{% endif %}
+        <a href="{{ BP }}/export" target="_blank">📥 Excel</a>
+        {% if user %}<a href="{{ BP }}/logout">Logout</a>{% endif %}
       </div>
     </div>
 
@@ -194,7 +194,7 @@
 
   <script>
     (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
-      if(r.status===401){ location.href='/login'; } return r; }; })();
+      if(r.status===401){ location.href='{{ BP }}/login'; } return r; }; })();
     const today = "{{ today }}";
     let current = { action:null, id:null };
     const confirmBtn = document.getElementById('modalConfirm');
@@ -261,7 +261,7 @@
       f.innerHTML = '<div class="muted">Loading…</div>';
       document.getElementById('modalBg').classList.add('show');
       try{
-        const res = await fetch(`/cheque/${id}/history`);
+        const res = await fetch(`{{ BP }}/cheque/${id}/history`);
         const data = await res.json();
         f.innerHTML = renderHistory(data);
       }catch{ f.innerHTML = '<div class="muted">Could not load history.</div>'; }
@@ -301,11 +301,11 @@
       if(action === 'override'){
         const reason = document.getElementById('o-reason')?.value.trim();
         if(!reason){ showToast('⚠ A reason is required', true); return; }
-        url = `/cheque/${id}/override`;
+        url = `{{ BP }}/cheque/${id}/override`;
         body = { cheque_date_iso: document.getElementById('o-date')?.value,
                  amount_numbers:  document.getElementById('o-amount')?.value, reason };
       } else {
-        url = `/cheque/${id}/${action}`;
+        url = `{{ BP }}/cheque/${id}/${action}`;
         body = { date: document.getElementById('m-date')?.value,
                  remarks: document.getElementById('m-remarks')?.value };
         if(action === 'bounce' || action === 'close'){ body.reason = document.getElementById('m-reason')?.value; }
@@ -325,7 +325,7 @@
 
     async function setLocation(id, sel){
       try{
-        const res = await fetch(`/cheque/${id}/location`, {
+        const res = await fetch(`{{ BP }}/cheque/${id}/location`, {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ cheque_location: sel.value })
         });

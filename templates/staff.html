@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Staff Master — RDC Cheque Tracking and Control System</title>
@@ -67,11 +67,11 @@
   </style>
 </head>
 <body>
-  <div class="topbar"><a href="/">＋ Scan</a><a href="/dashboard">📊 Dashboard</a><a href="/report">📋 Report</a>
-    {% if user and user.role == 'HO_ADMIN' %}<a href="/users">👤 Users</a>{% endif %}
-    {% if user %}<a href="/logout">Logout</a>{% endif %}</div>
+  <div class="topbar"><a href="{{ BP }}/">＋ Scan</a><a href="{{ BP }}/dashboard">📊 Dashboard</a><a href="{{ BP }}/report">📋 Report</a>
+    {% if user and user.role == 'HO_ADMIN' %}<a href="{{ BP }}/users">👤 Users</a>{% endif %}
+    {% if user %}<a href="{{ BP }}/logout">Logout</a>{% endif %}</div>
   <div class="card">
-    <h1><img src="/static/rdc-logo.jpg" alt="RDC"
+    <h1><img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC"
       style="height:38px;background:#fff;border-radius:8px;padding:2px 6px;object-fit:contain;vertical-align:middle;margin-right:10px;" />👥 RDC Cheque Tracking and Control System <span style="font-weight:400;font-size:.72em;color:#6b7280;">&middot; Staff Master</span></h1>
     <div class="sub">One row per employee, keyed by HRIS <b>EMP_CODE</b>. <b>ROLE decides what the
       person can do in the app</b> (SALES = scan &amp; save · ACCOUNTS = scan + status updates ·
@@ -222,7 +222,7 @@
 
   <script>
     (function(){ const _f=window.fetch; window.fetch=async(...a)=>{ const r=await _f(...a);
-      if(r.status===401){ location.href='/login'; } return r; }; })();
+      if(r.status===401){ location.href='{{ BP }}/login'; } return r; }; })();
 
     function stoast(m, err){ const t=document.getElementById('stoast');
       t.textContent=m; t.classList.toggle('err',!!err); t.classList.add('show');
@@ -237,7 +237,7 @@
       if (!dry && !confirm(`Apply this handover? ${locs.length} location(s) will move to the selected person, along with their live cheques.`)) return;
       btn.disabled = true; const lbl = btn.textContent; btn.textContent = 'Working…';
       try {
-        const res = await fetch('/staff/reassign-location', {
+        const res = await fetch('{{ BP }}/staff/reassign-location', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ locations: locs, emp_code: emp, dry_run: dry })
         });
@@ -272,7 +272,7 @@
     async function resyncRouting(btn){
       btn.disabled = true; const label = btn.textContent; btn.textContent = 'Working…';
       try{
-        const res = await fetch('/staff/resync', {method:'POST'});
+        const res = await fetch('{{ BP }}/staff/resync', {method:'POST'});
         const d = await res.json();
         if(d.success){
           stoast(`✓ Checked ${d.checked} — filled Accounts on ${d.accounts_filled}, BH on ${d.bh_filled}` +
@@ -288,7 +288,7 @@
       tr.querySelectorAll('[data-f]').forEach(i => body[i.dataset.f] = i.value);
       btn.disabled = true; btn.textContent = '…';
       try{
-        const res = await fetch('/staff/update', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+        const res = await fetch('{{ BP }}/staff/update', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
         const data = await res.json();
         if(data.success){ stoast('✓ Saved "'+name+'"'); tr.classList.remove('dirty'); }
         else stoast('⚠ '+(data.error||'Failed'), true);
@@ -300,7 +300,7 @@
       const tr = btn.closest('tr'); const name = tr.dataset.code;
       if(!confirm('Delete employee "'+name+'"? This cannot be undone.')) return;
       try{
-        const res = await fetch('/staff/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emp_code:name})});
+        const res = await fetch('{{ BP }}/staff/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emp_code:name})});
         const data = await res.json();
         if(data.success){ stoast('✓ Deleted "'+name+'"'); tr.remove(); }
         else stoast('⚠ '+(data.error||'Failed'), true);
@@ -386,7 +386,7 @@
       const fd=new FormData(); fd.append('file',selected);
       let timer=setTimeout(()=>{ msg.className='msg err'; msg.textContent='⚠ Upload timed out. Please try again.'; resetForm(); }, 60000);
       try{
-        const res=await fetch('/staff/upload',{method:'POST',body:fd});
+        const res=await fetch('{{ BP }}/staff/upload',{method:'POST',body:fd});
         clearTimeout(timer);
         const data=await res.json();
         if(data.success){

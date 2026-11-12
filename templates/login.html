@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" href="/static/favicon.ico" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" href="{{ BP }}/static/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ BP }}/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ BP }}/static/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ BP }}/static/apple-touch-icon.png">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Sign In — RDC Cheque Tracking and Control System</title>
@@ -33,7 +33,7 @@
 <body>
   <div class="card">
     <div class="logo">
-      <img src="/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver"
+      <img src="{{ BP }}/static/rdc-logo.jpg" alt="RDC — We Promise We Deliver"
            style="height:52px;background:#fff;border-radius:10px;padding:3px 8px;object-fit:contain;" />
       <div><h1>RDC Cheque Tracking and Control System</h1><p>Sign in to continue</p></div>
     </div>
@@ -48,7 +48,7 @@
       ✓ Your password has been changed. Please sign in with your new password.
     </div>
     {% endif %}
-    <form method="POST" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+    <form method="POST" action="{{ BP }}/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
       <label for="email">Email</label>
       <input type="email" id="email" name="email" autocomplete="username" required autofocus />
       <label for="password">Password</label>
@@ -56,7 +56,7 @@
       <button class="btn" type="submit">Sign In</button>
     </form>
     <div style="margin-top:14px;text-align:center;font-size:13px;">
-      <a href="/forgot" style="color:#7c9bff;text-decoration:none;">Forgot password?</a>
+      <a href="{{ BP }}/forgot" style="color:#7c9bff;text-decoration:none;">Forgot password?</a>
     </div>
     {% if error %}<div class="err">⚠ {{ error }}</div>{% endif %}
   </div>
